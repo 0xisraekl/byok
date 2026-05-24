@@ -1,0 +1,146 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  BYOK Model Pool — YOUR models, YOUR keys
+#
+#  This file defines every model BYOK is allowed to route to.
+#  BYOK will never call a model not listed here.
+#
+#  HOW TO ADD A MODEL:
+#  1. Copy any block below as a template
+#  2. Set your provider + api_key_env (points to a key in your .env)
+#  3. Set the strengths that match what the model is good at
+#  4. Set a spend_limit_monthly_usd (0 = unlimited)
+#  5. Save — BYOK picks it up automatically on next start
+#
+#  STRENGTHS (use these exact strings):
+#    coding        → writing code, debugging, SQL, scripts
+#    reasoning     → analysis, comparisons, multi-step thinking
+#    math          → equations, calculations, proofs
+#    writing       → emails, essays, creative content, editing
+#    summarization → condensing long text into short output
+#    tool_calling  → using external tools/functions
+#    long_context  → handling very large inputs (>30k tokens)
+#    simple_chat   → quick, conversational, factual answers
+#    private       → forces local-only routing (never sent to cloud)
+# ─────────────────────────────────────────────────────────────────────────────
+
+models:
+
+  # ── LOCAL MODELS (free, private, no API key needed) ───────────────────────
+  # Requires Ollama running: https://ollama.com
+  # Pull models with: ollama pull gemma3:6b
+
+  - name: "gemma3-local"
+    provider: ollama
+    model_id: "gemma3:6b"
+    strengths:
+      - simple_chat
+      - summarization
+      - private
+    context_window: 8192
+    cost_per_1k_input: 0.0
+    cost_per_1k_output: 0.0
+    latency: medium           # depends on your machine
+    supports_tools: false
+    local: true
+    enabled: true
+    spend_limit_monthly_usd: 0  # free, never hits a limit
+    priority: 1                 # 1 = try first when a tie, higher = lower priority
+
+  # ── OPENAI ────────────────────────────────────────────────────────────────
+
+  - name: "gpt-4o"
+    provider: openai
+    model_id: "gpt-4o"
+    api_key_env: OPENAI_API_KEY   # reads from your .env
+    strengths:
+      - reasoning
+      - coding
+      - tool_calling
+      - writing
+    context_window: 128000
+    cost_per_1k_input: 0.0025
+    cost_per_1k_output: 0.010
+    latency: medium
+    supports_tools: true
+    local: false
+    enabled: true
+    spend_limit_monthly_usd: 20.0  # stop routing here after $20/month
+    priority: 2
+
+  - name: "gpt-4o-mini"
+    provider: openai
+    model_id: "gpt-4o-mini"
+    api_key_env: OPENAI_API_KEY
+    strengths:
+      - simple_chat
+      - summarization
+    context_window: 128000
+    cost_per_1k_input: 0.00015
+    cost_per_1k_output: 0.0006
+    latency: low
+    supports_tools: true
+    local: false
+    enabled: true
+    spend_limit_monthly_usd: 10.0
+    priority: 1
+
+  # ── ANTHROPIC (Claude) ────────────────────────────────────────────────────
+
+  - name: "claude-3-5-sonnet"
+    provider: anthropic
+    model_id: "claude-3-5-sonnet-20241022"
+    api_key_env: ANTHROPIC_API_KEY
+    strengths:
+      - coding
+      - reasoning
+      - writing
+      - long_context
+      - tool_calling
+    context_window: 200000
+    cost_per_1k_input: 0.003
+    cost_per_1k_output: 0.015
+    latency: medium
+    supports_tools: true
+    local: false
+    enabled: true
+    spend_limit_monthly_usd: 30.0
+    priority: 2
+
+  - name: "claude-3-haiku"
+    provider: anthropic
+    model_id: "claude-3-haiku-20240307"
+    api_key_env: ANTHROPIC_API_KEY
+    strengths:
+      - summarization
+      - simple_chat
+      - long_context
+    context_window: 200000
+    cost_per_1k_input: 0.00025
+    cost_per_1k_output: 0.00125
+    latency: low
+    supports_tools: true
+    local: false
+    enabled: true
+    spend_limit_monthly_usd: 10.0
+    priority: 1
+
+  # ── DEEPSEEK (OpenAI-compatible, cheap reasoning) ─────────────────────────
+
+  - name: "deepseek-reasoner"
+    provider: openai_compatible
+    model_id: "deepseek-reasoner"
+    base_url: "https://api.deepseek.com/v1"
+    api_key_env: DEEPSEEK_API_KEY
+    strengths:
+      - reasoning
+      - math
+      - coding
+    context_window: 64000
+    cost_per_1k_input: 0.00055
+    cost_per_1k_output: 0.00219
+    latency: high
+    supports_tools: false
+    local: false
+    enabled: false              # flip to true once you add DEEPSEEK_API_KEY
+    spend_limit_monthly_usd: 10.0
+    priority: 2
