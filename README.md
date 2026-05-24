@@ -150,10 +150,16 @@ api_key = "byok"  # any non-empty string for local use
 # Start the proxy server
 byok serve
 
+# Check local setup/config before running the proxy
+byok doctor
+
 # Preview routing decisions
 byok route "Write a function to parse XML"
 byok route "Analyze this confidential document" --private
 byok route "Search and summarize today's news" --tools
+byok route "Draft a quick email" --mode cheap
+byok route "Debug this production issue" --mode quality
+byok route "Summarize this customer data" --mode private
 
 # Inspect configured models
 byok models
@@ -250,6 +256,8 @@ Restart `byok serve`.
 
 ## Roadmap
 
+- [x] Add `byok doctor` for config/key/local-service diagnostics
+- [x] Add routing modes for cheap, quality, private, and speed preferences
 - [ ] Improve OpenAI-compatible chat/completions coverage
 - [ ] Add richer provider health checks
 - [ ] Add real token/cost accounting from provider responses

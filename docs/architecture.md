@@ -113,6 +113,14 @@ Common filters:
 - lacks tool support
 - cloud model when privacy mode requires local
 
+Routing modes can add preferences on top of the default scoring:
+
+- `balanced`: default task-fit routing
+- `cheap`: prefer local/free and low-cost models
+- `quality`: prefer specialists and large-context models
+- `private`: force local-only routing
+- `speed`: prefer low-latency models
+
 Scoring can consider:
 
 - task/type fit

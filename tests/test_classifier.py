@@ -33,6 +33,10 @@ class TestTaskTypeClassification:
         profile = clf.classify(msg("Debug this Python code: the function throws a KeyError on line 42"))
         assert profile.task_type == "coding"
 
+    def test_coding_debug_endpoint(self, clf):
+        profile = clf.classify(msg("Debug this FastAPI endpoint"))
+        assert profile.task_type == "coding"
+
     def test_coding_sql(self, clf):
         profile = clf.classify(msg("Write a SQL query that joins users and orders tables on user_id and filters by last 30 days"))
         assert profile.task_type == "coding"

@@ -65,9 +65,10 @@ class ModelRouter:
       ✗  privacy required but model is not local
     """
 
-    def __init__(self, registry: ModelRegistry, spend_tracker: SpendTracker):
+    def __init__(self, registry: ModelRegistry, spend_tracker: SpendTracker, mode: str = "balanced"):
         self.registry = registry
         self.spend_tracker = spend_tracker
+        self.mode = mode
 
     def route(self, task: TaskProfile) -> Optional[RoutingDecision]:
         """
@@ -142,7 +143,7 @@ class ModelRouter:
             return float("-inf"), f"context too large ({task.context_tokens} > {model.context_window})"
 
         # Privacy: must use local model
-        if task.privacy_required and not model.local:
+        if (task.privacy_required or self.mode == "private") and not model.local:
             return float("-inf"), "privacy required, model is not local"
 
         # ── Positive scoring ───────────────────────────────────────────────
@@ -169,6 +170,35 @@ class ModelRouter:
             reasons.append("fast")
         elif model.latency == "high":
             score -= 2.0
+
+        # Mode-specific preferences
+        if self.mode == "cheap":
+            if model.local:
+                score += 4.0
+                reasons.append("cheap mode: local/free")
+            elif model.cost_per_1k_input <= 0.0005:
+                score += 4.0
+                reasons.append("cheap mode: low input cost")
+            elif model.cost_per_1k_input >= 0.002:
+                score -= 4.0
+                reasons.append("expensive for cheap mode")
+        elif self.mode == "quality":
+            if task.task_type in model.strengths:
+                score += 2.0
+                reasons.append("quality mode: specialist")
+            if model.context_window >= 100000:
+                score += 1.0
+                reasons.append("large context")
+        elif self.mode == "speed":
+            if model.latency == "low":
+                score += 4.0
+                reasons.append("speed mode: low latency")
+            elif model.latency == "high":
+                score -= 4.0
+                reasons.append("slow for speed mode")
+        elif self.mode == "private" and model.local:
+            score += 5.0
+            reasons.append("private mode: local only")
 
         # Difficulty vs. model capability:
         # For "hard" tasks, prefer models that aren't the cheapest/simplest

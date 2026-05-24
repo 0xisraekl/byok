@@ -231,6 +231,41 @@ class TestContextWindowRouting:
 
 # ── Scoring logic ──────────────────────────────────────────────────────────────
 
+class TestRoutingModes:
+
+    def test_private_mode_forces_local_model_even_without_privacy_keywords(self, spend_tracker):
+        cloud_model = make_model(name="cloud", local=False, strengths=["simple_chat"])
+        local_model = make_model(name="local", local=True, strengths=["simple_chat"])
+        router = ModelRouter(FakeRegistry([cloud_model, local_model]), spend_tracker, mode="private")
+
+        decision = router.route(make_profile(task_type="simple_chat", privacy_required=False))
+
+        assert decision is not None
+        assert decision.selected_model.name == "local"
+
+    def test_cheap_mode_prefers_cheaper_model_when_models_are_otherwise_similar(self, spend_tracker):
+        expensive = make_model(name="expensive", strengths=["summarization"], cost_per_1k_input=0.003)
+        cheap = make_model(name="cheap", strengths=["summarization"], cost_per_1k_input=0.0001)
+        router = ModelRouter(FakeRegistry([expensive, cheap]), spend_tracker, mode="cheap")
+
+        decision = router.route(make_profile(task_type="summarization", difficulty="medium"))
+
+        assert decision is not None
+        assert decision.selected_model.name == "cheap"
+        assert "cheap mode" in decision.reason
+
+    def test_speed_mode_prefers_low_latency_model_when_models_are_otherwise_similar(self, spend_tracker):
+        slow = make_model(name="slow", strengths=["simple_chat"], latency="high")
+        fast = make_model(name="fast", strengths=["simple_chat"], latency="low")
+        router = ModelRouter(FakeRegistry([slow, fast]), spend_tracker, mode="speed")
+
+        decision = router.route(make_profile(task_type="simple_chat"))
+
+        assert decision is not None
+        assert decision.selected_model.name == "fast"
+        assert "speed mode" in decision.reason
+
+
 class TestScoringLogic:
 
     def test_local_model_preferred_when_tied(self, spend_tracker):

@@ -28,7 +28,8 @@ from typing import Optional
 TASK_SIGNALS: dict[str, list[tuple[str, float]]] = {
     "coding": [
         (r"\b(write|create|build|implement)\s+a?\s*(function|class|script|program|api|endpoint|module|component|service)\b", 3.0),
-        (r"\b(debug|fix|refactor|optimize|review|test)\s+(this\s+)?(code|function|script|bug|error|issue)\b", 3.0),
+        (r"\b(debug|fix|refactor|optimize|review|test)\s+(this\s+)?(code|function|script|bug|error|issue|api|endpoint|service|component|module)\b", 3.0),
+        (r"\b(fastapi|django|flask|express|next\.js|nextjs|api\s+route|endpoint)\b", 2.0),
         (r"\b(python|javascript|typescript|rust|go|java|sql|bash|html|css|react|node|c\+\+|kotlin|swift)\b", 2.0),
         (r"```[\w]*",                    2.0),   # code block in message
         (r"\b(def |class |import |from |const |let |var |func |fn )\b", 2.0),

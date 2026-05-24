@@ -96,7 +96,14 @@ def serve(port: int, host: str, reload: bool):
 @click.option("--task", "-t", help="Force a task type (coding, reasoning, etc.)")
 @click.option("--tools", is_flag=True, help="Simulate a request that includes tools")
 @click.option("--private", is_flag=True, help="Simulate a private/local-only request")
-def route(message: str, task: str, tools: bool, private: bool):
+@click.option(
+    "--mode",
+    default="balanced",
+    type=click.Choice(["balanced", "cheap", "quality", "private", "speed"]),
+    show_default=True,
+    help="Routing mode: balanced, cheap, quality, private, or speed",
+)
+def route(message: str, task: str, tools: bool, private: bool, mode: str):
     """
     Classify a task and show which model BYOK would choose.
 
@@ -118,7 +125,7 @@ def route(message: str, task: str, tools: bool, private: bool):
     reg = ModelRegistry(CONFIG_PATH)
     tracker = SpendTracker(DB_PATH)
     clf = TaskClassifier()
-    rtr = ModelRouter(reg, tracker)
+    rtr = ModelRouter(reg, tracker, mode=mode)
 
     # Build a fake messages list
     messages = [{"role": "user", "content": message}]
@@ -144,6 +151,7 @@ def route(message: str, task: str, tools: bool, private: bool):
     t = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
     t.add_column(style="dim")
     t.add_column(style="bold")
+    t.add_row("Mode", f"[magenta]{mode}[/magenta]")
     t.add_row("Task type", f"[cyan]{task_profile.task_type}[/cyan]")
     t.add_row("Difficulty", task_profile.difficulty)
     t.add_row("Context tokens", str(task_profile.context_tokens))
@@ -175,6 +183,48 @@ def route(message: str, task: str, tools: bool, private: bool):
 
     console.print(Panel(r, title="✓ Routing Decision", border_style="green"))
     console.print()
+
+
+# ── byok doctor ───────────────────────────────────────────────────────────────
+
+@cli.command()
+def doctor():
+    """Check BYOK config, model keys, local services, and spend DB."""
+    from byok.core.doctor import build_doctor_checks
+    from byok.core.registry import ModelRegistry
+
+    console.print()
+    console.print(Panel.fit("[bold]BYOK Doctor[/bold]\nChecking local setup without making paid API calls.", border_style="cyan"))
+
+    models_list = None
+    try:
+        models_list = ModelRegistry(CONFIG_PATH).all_models()
+    except FileNotFoundError:
+        models_list = None
+
+    checks = build_doctor_checks(CONFIG_PATH, DB_PATH, models_list)
+
+    table = Table(box=box.ROUNDED)
+    table.add_column("Status", width=10)
+    table.add_column("Check", style="bold")
+    table.add_column("Details")
+
+    icon = {
+        "ok": "[green]✅ ok[/green]",
+        "warning": "[yellow]⚠ warn[/yellow]",
+        "error": "[red]✗ error[/red]",
+    }
+    for check in checks:
+        table.add_row(icon.get(check.status, check.status), check.name, check.detail)
+
+    console.print(table)
+
+    if any(c.status == "error" for c in checks):
+        console.print("[red]Fix errors before running the proxy.[/red]\n")
+    elif any(c.status == "warning" for c in checks):
+        console.print("[yellow]BYOK can run, but warnings may limit routing options.[/yellow]\n")
+    else:
+        console.print("[green]BYOK setup looks healthy.[/green]\n")
 
 
 # ── byok models ───────────────────────────────────────────────────────────────
