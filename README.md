@@ -1,112 +1,161 @@
 # BYOK — Bring Your Own Key
 
-> Intelligent model routing for AI agent frameworks.
-> Use the right model for each task. Lower costs. Higher quality. Your keys, your control.
+> Local-first model routing for AI agent frameworks.
+> Use the right model for each task. Lower costs, avoid limits, keep sensitive work local, and stay in control of your own keys.
+
+BYOK is an experimental OpenAI-compatible proxy that sits between an AI agent and your model providers. Instead of sending every task to the same model, BYOK classifies the task, checks your configured model pool, respects spend/privacy rules, and routes the request to the best available option.
 
 ---
 
-## The Problem
+## Why this exists
 
-Most AI agents use one model for everything.
+Most AI agent workflows have the same problem:
 
-That means you pay GPT-4o prices to answer "what's the capital of France?" and you use a cheap model to write production code. Both are wrong.
+- one model is better for coding
+- another is cheaper for simple tasks
+- local models are better for privacy
+- paid APIs hit limits or get expensive
+- no single provider is always the best choice
 
-## The Solution
+So the question becomes:
 
-BYOK sits between your agent and your models. It reads each incoming task, figures out what kind of task it is, and routes it to the best model in **your configured pool**.
+> What if your agent had a small routing layer that decided which model should handle each task?
 
-```
-Your Agent (Hermes / OpenClaw / any framework)
+That's what BYOK is trying to become.
+
+---
+
+## Example
+
+```text
+Your Agent (Hermes / OpenClaw / Cursor / any OpenAI-compatible client)
       │
       │  "Write a SQL query that joins 3 tables"
       ▼
 ┌─────────────────────────────────────────┐
-│             BYOK ROUTER                 │
+│              BYOK ROUTER                │
 │                                         │
-│  Task type:  coding   (hard)            │
-│  Pool:       gemma3-local               │
-│              gpt-4o-mini                │
-│              claude-3-5-sonnet  ← picks │
-│              deepseek-reasoner          │
+│  Task type:  coding                     │
+│  Difficulty: medium                     │
+│  Privacy:    normal                     │
 │                                         │
-│  Reason: strong at coding, fits context │
+│  Candidate models:                      │
+│  - local-gemma                          │
+│  - gpt-4o-mini                          │
+│  - claude-sonnet  ← selected            │
+│                                         │
+│  Reason: strongest enabled coding model │
+│          under configured spend limit   │
 └─────────────────────────────────────────┘
       │
       ▼
-  claude-3-5-sonnet answers the task
+  selected model answers the request
 ```
 
-**Simple chat?** → free local model.
-**Complex reasoning?** → your best reasoning model.
-**Model at its spend limit?** → auto-fallback to the next best.
-**Private/sensitive data?** → local-only, never sent to the cloud.
+Simple chat can go to a local/free model. Complex coding can go to a stronger model. Sensitive requests can be forced local-only. Models at their spend limit can be skipped automatically.
+
+---
+
+## Current status
+
+This is an early portfolio/learning project. The core shape is here:
+
+- task classifier
+- model registry from YAML
+- rule-based router
+- spend tracker
+- provider interfaces
+- FastAPI OpenAI-compatible proxy skeleton
+- CLI commands
+- tests for the routing pieces
+
+It is not production-ready yet. I'm building it in public as I learn.
 
 ---
 
 ## Features
 
-- **OpenAI-compatible proxy** — point any agent at `http://localhost:8000/v1`, no code changes
-- **Your model pool** — define exactly which models BYOK can use, in `config/models.yaml`
-- **Task-aware routing** — classifies: coding, reasoning, math, writing, summarization, tool-calling, simple chat
-- **Spend limits** — set a monthly USD cap per model; BYOK stops routing there when reached
-- **Privacy mode** — keyword detection forces local-only routing for sensitive requests
-- **Full routing log** — every decision is stored locally with the reason, tokens, and cost
-- **Zero cloud dependencies** — runs entirely on your machine
+- **OpenAI-compatible proxy** — point compatible clients at `http://localhost:8000/v1`
+- **Configurable model pool** — define available models in `config/models.yaml`
+- **Task-aware routing** — coding, reasoning, math, writing, summarization, tool-calling, simple chat
+- **Spend limits** — set a monthly USD cap per model
+- **Privacy mode** — force sensitive/private requests to local models only
+- **Local routing log** — record decisions, estimated cost, and chosen model in SQLite
+- **Provider flexibility** — OpenAI, Anthropic, Ollama/local models, and OpenAI-compatible APIs
+- **Transparent rules** — routing logic is simple, inspectable, and easy to change
 
 ---
 
-## Quick Start
+## Quick start
 
-### 1. Install
+### 1. Clone and install
 
 ```bash
-git clone https://github.com/yourusername/byok
+git clone https://github.com/0xisraekl/byok.git
 cd byok
+python -m venv .venv
+source .venv/bin/activate
 pip install -e .
 ```
 
-### 2. Add your API keys
+### 2. Add API keys
 
 ```bash
 cp .env.example .env
-# Edit .env and add your keys
+# Edit .env and add only the keys you want to use
 ```
 
-### 3. Configure your model pool
+### 3. Configure models
 
-Edit `config/models.yaml`. Enable the models you have keys for.
-Each model has `enabled: true/false` — flip it on for the ones you want.
+Edit `config/models.yaml` and enable the models you want BYOK to route to.
 
-### 4. Start BYOK
+Each model can define:
+
+- provider
+- model ID
+- strengths
+- context window
+- estimated cost
+- local/cloud flag
+- tool support
+- monthly spend limit
+- priority
+
+### 4. Try routing without making an API call
+
+```bash
+byok route "Write a Python function that parses a CSV file"
+byok route "Summarize these notes into action items"
+byok route "Analyze this private customer document" --private
+```
+
+### 5. Start the proxy
 
 ```bash
 byok serve
 ```
 
-### 5. Point your agent at BYOK
+Then point an OpenAI-compatible client at:
 
-In your Hermes Agent (or any OpenAI-compatible framework):
 ```python
 base_url = "http://localhost:8000/v1"
-api_key  = "byok"   # any non-empty string
+api_key = "byok"  # any non-empty string for local use
 ```
-
-That's it. BYOK handles the rest.
 
 ---
 
-## CLI Commands
+## CLI commands
 
 ```bash
 # Start the proxy server
 byok serve
 
-# See what model would be chosen (without making any API call)
+# Preview routing decisions
 byok route "Write a function to parse XML"
 byok route "Analyze this confidential document" --private
 byok route "Search and summarize today's news" --tools
 
-# Show your model pool + spend status
+# Inspect configured models
 byok models
 
 # Show recent routing decisions
@@ -118,12 +167,48 @@ byok spend
 
 ---
 
-## Adding a Model
+## How routing works
 
-Open `config/models.yaml` and add a block:
+1. **Classify** the incoming request by task type and difficulty.
+2. **Filter** out models that are disabled, over budget, missing required tool support, too small for the context, or not local when privacy mode is required.
+3. **Score** the remaining models by task fit, local preference, latency, cost, and configured priority.
+4. **Select** the highest-scoring model.
+5. **Log** the decision locally for debugging and spend tracking.
+
+See [`docs/architecture.md`](docs/architecture.md) for a deeper walkthrough.
+
+---
+
+## Project structure
+
+```text
+byok/
+├── byok/
+│   ├── core/
+│   │   ├── classifier.py      # Task type + difficulty detection
+│   │   ├── registry.py        # Loads config/models.yaml
+│   │   └── router.py          # Filtering, scoring, model selection
+│   ├── providers/             # Provider interfaces
+│   ├── proxy/                 # FastAPI OpenAI-compatible server
+│   ├── storage/               # SQLite spend/routing tracker
+│   └── cli/                   # byok CLI
+├── config/
+│   └── models.yaml            # Model pool configuration
+├── docs/
+│   └── architecture.md
+├── examples/
+│   └── hermes_agent_integration.md
+└── tests/
+```
+
+---
+
+## Adding a model
+
+Add a block to `config/models.yaml`:
 
 ```yaml
-- name: "my-groq-llama"
+- name: "groq-llama"
   provider: openai_compatible
   model_id: "llama-3.3-70b-versatile"
   base_url: "https://api.groq.com/openai/v1"
@@ -143,88 +228,52 @@ Open `config/models.yaml` and add a block:
   priority: 1
 ```
 
-Then add `GROQ_API_KEY=your_key` to `.env`. Restart `byok serve`. Done.
+Then add the key to `.env`:
 
----
-
-## Supported Providers
-
-| Provider | Type | Notes |
-|---|---|---|
-| OpenAI | `openai` | GPT-4o, GPT-4o-mini, etc. |
-| Anthropic | `anthropic` | Claude 3.5 Sonnet, Haiku, etc. |
-| Ollama | `ollama` | Any local model — free and private |
-| DeepSeek | `openai_compatible` | Strong reasoning, cheap |
-| Groq | `openai_compatible` | Very fast inference |
-| Any OpenAI-compatible API | `openai_compatible` | Set `base_url` |
-
----
-
-## How Routing Works
-
-1. **Classify** — Read the incoming messages. Match keyword patterns to detect task type (coding, reasoning, summarization, etc.) and difficulty.
-
-2. **Filter** — Remove models that can't handle the task: wrong context size, no tool support, at spend limit, not local when privacy is required.
-
-3. **Score** — Each remaining model gets a score:
-   - +10 if the task type matches a strength
-   - +5 for secondary matches
-   - +3 for local (free) models
-   - −2 for high-latency models
-   - −3 if the model seems too cheap for a hard task
-   - −∞ (disqualified) if at spend limit
-
-4. **Select** — Highest score wins. Ties broken by `priority` in config.
-
-5. **Log** — Every decision is recorded in `byok.db` with reason, tokens, and cost.
-
----
-
-## Project Structure
-
-```
-byok/
-├── byok/
-│   ├── core/
-│   │   ├── classifier.py   # Task type detection
-│   │   ├── router.py       # Scoring and model selection
-│   │   └── registry.py     # Loads models.yaml
-│   ├── providers/
-│   │   ├── openai_provider.py
-│   │   ├── anthropic_provider.py
-│   │   └── ollama_provider.py
-│   ├── proxy/
-│   │   └── server.py       # FastAPI OpenAI-compatible server
-│   ├── storage/
-│   │   └── spend_tracker.py  # SQLite log
-│   └── cli/
-│       └── main.py         # byok CLI
-├── config/
-│   └── models.yaml         # Your model pool (edit this)
-├── examples/
-│   └── hermes_agent_integration.md
-└── .env.example
+```bash
+GROQ_API_KEY=your_key_here
 ```
 
+Restart `byok serve`.
+
 ---
 
-## Compared to Similar Tools
+## Similar tools
 
-| Tool | What it does | BYOK difference |
+| Tool | What it does | How BYOK is different |
 |---|---|---|
-| LiteLLM | Multi-provider unified API | BYOK adds task-aware routing intelligence |
-| OpenRouter | Hosted routing service | BYOK is local-first, no third party, your keys |
-| RouteLLM | ML-based routing | BYOK is rule-based + config, transparent and beginner-friendly |
+| LiteLLM | Multi-provider unified API | BYOK focuses on task-aware routing decisions |
+| OpenRouter | Hosted model marketplace/router | BYOK is local-first and uses your own keys |
+| RouteLLM | Learned routing between strong/weak models | BYOK is rule-based, transparent, and beginner-friendly |
+
+---
+
+## Roadmap
+
+- [ ] Improve OpenAI-compatible chat/completions coverage
+- [ ] Add richer provider health checks
+- [ ] Add real token/cost accounting from provider responses
+- [ ] Add a web dashboard for routing decisions and spend
+- [ ] Add benchmark prompts for comparing routing quality
+- [ ] Add config validation and better error messages
+- [ ] Add example integrations with Hermes and other agent frameworks
+
+---
+
+## Contributing
+
+This is a learning/public-build project. Issues, ideas, and PRs are welcome.
+
+Good first contributions:
+
+- add a provider adapter
+- improve task classification rules
+- improve docs/examples
+- add tests for edge cases
+- suggest routing heuristics
 
 ---
 
 ## License
 
 MIT — free to use, fork, and build on.
-
----
-
-## Contributing
-
-This is a portfolio/learning project. Issues and PRs welcome.
-See `docs/architecture.md` for a deeper technical walkthrough.
