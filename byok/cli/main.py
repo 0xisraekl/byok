@@ -174,7 +174,15 @@ def route(message: str, task: str, tools: bool, private: bool, mode: str):
     r.add_row("Provider", m.provider)
     r.add_row("Reason", decision.reason)
     r.add_row("Score", str(round(decision.score, 1)))
+    r.add_row("Quality estimate", f"{decision.quality_estimate:.0%}")
     r.add_row("Est. cost", f"${decision.estimated_cost_usd:.5f}")
+    r.add_row("Est. output tokens", str(decision.estimated_output_tokens))
+    if decision.best_quality_model:
+        r.add_row("Best quality in pool", decision.best_quality_model)
+    if decision.premium_reference_cost_usd is not None:
+        r.add_row("Premium ref. cost", f"${decision.premium_reference_cost_usd:.5f}")
+    if decision.estimated_savings_usd is not None and decision.estimated_savings_usd > 0:
+        r.add_row("Est. savings", f"${decision.estimated_savings_usd:.5f} ({decision.estimated_savings_pct:.0f}%)")
     r.add_row("Latency", m.latency)
 
     if decision.alternatives:

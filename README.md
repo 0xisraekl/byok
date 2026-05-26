@@ -77,7 +77,10 @@ It is not production-ready yet. I'm building it in public as I learn.
 
 - **OpenAI-compatible proxy** — point compatible clients at `http://localhost:8000/v1`
 - **Configurable model pool** — define available models in `config/models.yaml`
-- **Task-aware routing** — coding, reasoning, math, writing, summarization, tool-calling, simple chat
+- **Task-aware routing** — coding, reasoning, math, writing, summarization, extraction, data analysis, tool-calling, simple chat
+- **Quality-aware model selection** — per-model and per-task quality priors so Claude can win writing/coding, GPT can win structured/tool tasks, Gemini/OpenRouter can win long cheap summaries, etc.
+- **Cheapest good-enough mode** — avoid wasting premium models on extraction, classification, summaries, and easy chat
+- **Savings visibility** — every routing decision can show estimated cost, best-quality reference model, and estimated savings
 - **Spend limits** — set a monthly USD cap per model
 - **Privacy mode** — force sensitive/private requests to local models only
 - **Local routing log** — record decisions, estimated cost, and chosen model in SQLite
@@ -177,9 +180,16 @@ byok spend
 
 1. **Classify** the incoming request by task type and difficulty.
 2. **Filter** out models that are disabled, over budget, missing required tool support, too small for the context, or not local when privacy mode is required.
-3. **Score** the remaining models by task fit, local preference, latency, cost, and configured priority.
-4. **Select** the highest-scoring model.
-5. **Log** the decision locally for debugging and spend tracking.
+3. **Estimate task-specific quality** using each model's general `quality_score` and optional `task_quality` overrides.
+4. **Estimate cost** from input tokens, expected output tokens, and configured per-1k token pricing.
+5. **Score for the selected mode**:
+   - `balanced`: near-best quality at lower cost when possible
+   - `cheap`: cheapest model that clears the quality floor
+   - `quality`: strongest specialist under budget
+   - `speed`: fastest suitable model
+   - `private`: local-only
+6. **Select** the winner and show the best-quality reference model plus estimated savings.
+7. **Log** the decision locally for debugging and spend tracking.
 
 See [`docs/architecture.md`](docs/architecture.md) for a deeper walkthrough.
 

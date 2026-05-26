@@ -61,8 +61,8 @@ The classifier converts a user request into routing signals.
 
 Example signals:
 
-- task type: `coding`, `reasoning`, `math`, `writing`, `summarization`, `tool_calling`, `simple_chat`
-- difficulty: `low`, `medium`, `high`
+- task type: `coding`, `reasoning`, `math`, `writing`, `summarization`, `extraction`, `data_analysis`, `tool_calling`, `simple_chat`
+- difficulty: `easy`, `medium`, `hard`
 - privacy requirement: normal vs. private/local-only
 - tool requirement: whether function/tool calling is needed
 - context requirement: estimated context size
@@ -83,6 +83,8 @@ Each model can define:
 - base URL
 - API key env var
 - strengths
+- general `quality_score`
+- per-task `task_quality` overrides
 - context window
 - cost estimates
 - latency class
@@ -113,23 +115,34 @@ Common filters:
 - lacks tool support
 - cloud model when privacy mode requires local
 
-Routing modes can add preferences on top of the default scoring:
+Routing modes add preferences on top of the default scoring:
 
-- `balanced`: default task-fit routing
-- `cheap`: prefer local/free and low-cost models
-- `quality`: prefer specialists and large-context models
+- `balanced`: default; pick near-best task quality at lower cost when possible
+- `cheap`: prefer the cheapest model that clears the task's quality floor
+- `quality`: prefer the strongest specialist and tolerate higher cost
 - `private`: force local-only routing
 - `speed`: prefer low-latency models
 
-Scoring can consider:
+Scoring considers:
 
 - task/type fit
 - configured strengths
-- cost
+- per-task quality priors
+- estimated request cost
+- estimated output length by task/difficulty
 - latency
 - local preference
 - priority
 - difficulty fit
+
+The router also reports:
+
+- selected model
+- task-specific quality estimate
+- estimated request cost
+- best-quality model in the available pool
+- premium reference cost
+- estimated savings when a cheaper near-best model wins
 
 The router should always return a human-readable reason for the selection.
 

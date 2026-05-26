@@ -27,7 +27,7 @@ from typing import Optional
 
 TASK_SIGNALS: dict[str, list[tuple[str, float]]] = {
     "coding": [
-        (r"\b(write|create|build|implement)\s+a?\s*(function|class|script|program|api|endpoint|module|component|service)\b", 3.0),
+        (r"\b(write|create|build|implement)\b.{0,40}?\b(function|class|script|program|api|endpoint|module|component|service)\b", 3.0),
         (r"\b(debug|fix|refactor|optimize|review|test)\s+(this\s+)?(code|function|script|bug|error|issue|api|endpoint|service|component|module)\b", 3.0),
         (r"\b(fastapi|django|flask|express|next\.js|nextjs|api\s+route|endpoint)\b", 2.0),
         (r"\b(python|javascript|typescript|rust|go|java|sql|bash|html|css|react|node|c\+\+|kotlin|swift)\b", 2.0),
@@ -66,6 +66,19 @@ TASK_SIGNALS: dict[str, list[tuple[str, float]]] = {
         (r"\b(tone|style|voice|formal|informal|professional|persuasive|creative)\b", 2.0),
         (r"\b(introduction|conclusion|paragraph|section|chapter|outline)\b", 1.5),
         (r"\b(grammar|spelling|punctuation|word\s+choice|clarity|concise)\b", 1.5),
+    ],
+
+    "extraction": [
+        (r"\b(extract|pull out|parse|structure|convert)\b.{0,40}?\b(json|csv|table|fields?|names?|emails?|entities|schema)\b", 3.5),
+        (r"\b(return|format|output)\b.{0,30}?\b(valid\s+json|json|csv|yaml|xml)\b", 3.0),
+        (r"\b(classify|categorize|label|tag|dedupe|normalize|clean)\b", 2.5),
+        (r"\b(sentiment|entities|entity\s+extraction|structured\s+data)\b", 2.0),
+    ],
+
+    "data_analysis": [
+        (r"\b(analyze|analyse|chart|visualize|visualise|plot)\b.{0,40}?\b(data|dataset|spreadsheet|csv|metrics|numbers)\b", 3.0),
+        (r"\b(trend|correlation|cohort|funnel|retention|conversion|forecast|regression)\b", 2.5),
+        (r"\b(pandas|dataframe|notebook|dashboard|pivot|sql\s+analysis)\b", 2.0),
     ],
 
     "summarization": [
@@ -193,7 +206,10 @@ class TaskClassifier:
             best_score = 1.0
 
         # Confidence: how much did the winner beat the runner-up?
-        total = best_score + second_score
+        # Secondary signals are useful, but they should not make a clear compound
+        # task look uncertain (e.g. "write a Python function to parse JSON" is
+        # primarily coding with an extraction flavor).
+        total = best_score + (second_score * 0.5)
         confidence = best_score / total if total > 0 else 0.5
         confidence = min(confidence, 0.99)
 

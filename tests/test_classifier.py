@@ -82,6 +82,15 @@ class TestTaskTypeClassification:
         assert profile.task_type == "simple_chat"
 
 
+    def test_extraction_json_task(self, clf):
+        profile = clf.classify(msg("Extract names and emails from this text and return valid JSON"))
+        assert profile.task_type == "extraction"
+
+    def test_data_analysis_task(self, clf):
+        profile = clf.classify(msg("Analyze this CSV dataset and find trends in conversion metrics"))
+        assert profile.task_type == "data_analysis"
+
+
 # ── Tool calling detection ────────────────────────────────────────────────────
 
 class TestToolDetection:

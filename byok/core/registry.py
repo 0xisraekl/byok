@@ -45,6 +45,8 @@ class ModelConfig:
 
     # Performance
     latency: str = "medium"   # low | medium | high
+    quality_score: float = 0.70  # 0.0-1.0 general quality prior
+    task_quality: dict[str, float] = field(default_factory=dict)  # optional per-task quality priors
 
     # Connection
     api_key_env: Optional[str] = None   # name of the env var holding the key
@@ -121,6 +123,8 @@ class ModelRegistry:
                 cost_per_1k_input=entry.get("cost_per_1k_input", 0.0),
                 cost_per_1k_output=entry.get("cost_per_1k_output", 0.0),
                 latency=entry.get("latency", "medium"),
+                quality_score=entry.get("quality_score", 0.70),
+                task_quality=entry.get("task_quality", {}),
                 api_key_env=entry.get("api_key_env"),
                 base_url=entry.get("base_url"),
                 spend_limit_monthly_usd=entry.get("spend_limit_monthly_usd", 0.0),

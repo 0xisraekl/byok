@@ -150,6 +150,8 @@ async def chat_completions(request: Request):
     tools: list = body.get("tools", [])
     temperature: float = body.get("temperature", 0.7)
     max_tokens: Optional[int] = body.get("max_tokens")
+    requested_model: str = body.get("model", "auto")
+    route_mode = _mode_from_request(requested_model, body.get("byok_mode"))
 
     if not messages:
         raise HTTPException(status_code=400, detail="messages field is required")
@@ -158,7 +160,8 @@ async def chat_completions(request: Request):
     task = classifier.classify(messages, tools)
 
     # ── Route to best model ───────────────────────────────────────────────
-    decision = router.route(task)
+    request_router = ModelRouter(registry, spend_tracker, mode=route_mode)
+    decision = request_router.route(task)
 
     if decision is None:
         raise HTTPException(
@@ -217,10 +220,17 @@ async def chat_completions(request: Request):
             "confidence": round(task.confidence, 2),
         },
         "routing": {
+            "mode": route_mode,
             "selected_model": model.name,
             "provider": model.provider,
             "reason": decision.reason,
             "score": round(decision.score, 2),
+            "quality_estimate": round(decision.quality_estimate, 2),
+            "best_quality_model": decision.best_quality_model,
+            "estimated_cost_usd": round(decision.estimated_cost_usd, 6),
+            "premium_reference_cost_usd": round(decision.premium_reference_cost_usd, 6) if decision.premium_reference_cost_usd is not None else None,
+            "estimated_savings_usd": round(decision.estimated_savings_usd, 6) if decision.estimated_savings_usd is not None else None,
+            "estimated_savings_pct": round(decision.estimated_savings_pct, 1) if decision.estimated_savings_pct is not None else None,
             "alternatives": decision.alternatives,
         },
         "usage": {
@@ -260,6 +270,22 @@ async def chat_completions(request: Request):
         # BYOK metadata — extra field your agent can optionally read
         "byok": _last_decision["routing"] | {"cost_usd": round(cost, 6)},
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Request helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _mode_from_request(requested_model: str, explicit_mode: Optional[str]) -> str:
+    """Support OpenAI-compatible model names like auto:cheap / auto:quality."""
+    allowed = {"balanced", "cheap", "quality", "private", "speed"}
+    if explicit_mode in allowed:
+        return explicit_mode
+    if isinstance(requested_model, str) and requested_model.startswith("auto:"):
+        _, _, mode = requested_model.partition(":")
+        if mode in allowed:
+            return mode
+    return "balanced"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

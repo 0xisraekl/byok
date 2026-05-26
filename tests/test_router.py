@@ -298,3 +298,48 @@ class TestScoringLogic:
         decision = router.route(make_profile(task_type="coding"))
         assert decision is not None
         assert len(decision.alternatives) > 0
+
+    def test_balanced_mode_uses_quality_floor_not_just_lowest_price(self, spend_tracker):
+        weak_cheap = make_model(
+            name="weak-cheap",
+            strengths=["coding"],
+            quality_score=0.50,
+            task_quality={"coding": 0.50},
+            cost_per_1k_input=0.00001,
+            cost_per_1k_output=0.00002,
+        )
+        strong_mid = make_model(
+            name="strong-mid",
+            strengths=["coding"],
+            quality_score=0.84,
+            task_quality={"coding": 0.84},
+            cost_per_1k_input=0.0004,
+            cost_per_1k_output=0.0016,
+        )
+        router = ModelRouter(FakeRegistry([weak_cheap, strong_mid]), spend_tracker, mode="balanced")
+        decision = router.route(make_profile(task_type="coding", difficulty="medium"))
+        assert decision is not None
+        assert decision.selected_model.name == "strong-mid"
+        assert decision.quality_estimate >= 0.80
+
+    def test_quality_mode_reports_best_quality_reference(self, spend_tracker):
+        cheap = make_model(
+            name="cheap-good",
+            strengths=["summarization"],
+            task_quality={"summarization": 0.76},
+            cost_per_1k_input=0.0001,
+            cost_per_1k_output=0.0004,
+        )
+        premium = make_model(
+            name="premium-best",
+            strengths=["summarization"],
+            task_quality={"summarization": 0.92},
+            cost_per_1k_input=0.003,
+            cost_per_1k_output=0.015,
+        )
+        router = ModelRouter(FakeRegistry([cheap, premium]), spend_tracker, mode="quality")
+        decision = router.route(make_profile(task_type="summarization", difficulty="hard", context_tokens=4000))
+        assert decision is not None
+        assert decision.best_quality_model == "premium-best"
+        assert decision.premium_reference_cost_usd is not None
+        assert decision.estimated_savings_usd is not None
