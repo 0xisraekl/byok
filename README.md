@@ -81,6 +81,8 @@ It is not production-ready yet. I'm building it in public as I learn.
 - **Quality-aware model selection** — per-model and per-task quality priors so Claude can win writing/coding, GPT can win structured/tool tasks, Gemini/OpenRouter can win long cheap summaries, etc.
 - **Cheapest good-enough mode** — avoid wasting premium models on extraction, classification, summaries, and easy chat
 - **Savings visibility** — every routing decision can show estimated cost, best-quality reference model, and estimated savings
+- **Token budgets** — cap output tokens by task/difficulty/mode so cheap/balanced requests do not ramble and burn money
+- **Model specialties view** — inspect which configured model is best quality vs best value for coding, writing, extraction, etc.
 - **Spend limits** — set a monthly USD cap per model
 - **Privacy mode** — force sensitive/private requests to local models only
 - **Local routing log** — record decisions, estimated cost, and chosen model in SQLite
@@ -167,6 +169,9 @@ byok route "Summarize this customer data" --mode private
 # Inspect configured models
 byok models
 
+# See which model is best quality vs best value for each task
+byok specialties
+
 # Show recent routing decisions
 byok log
 
@@ -181,15 +186,16 @@ byok spend
 1. **Classify** the incoming request by task type and difficulty.
 2. **Filter** out models that are disabled, over budget, missing required tool support, too small for the context, or not local when privacy mode is required.
 3. **Estimate task-specific quality** using each model's general `quality_score` and optional `task_quality` overrides.
-4. **Estimate cost** from input tokens, expected output tokens, and configured per-1k token pricing.
-5. **Score for the selected mode**:
+4. **Estimate cost** from input tokens, mode-aware output token budget, and configured per-1k token pricing.
+5. **Apply a token budget** by task/difficulty/mode so easy or cost-sensitive requests get shorter max output caps.
+6. **Score for the selected mode**:
    - `balanced`: near-best quality at lower cost when possible
    - `cheap`: cheapest model that clears the quality floor
    - `quality`: strongest specialist under budget
    - `speed`: fastest suitable model
    - `private`: local-only
-6. **Select** the winner and show the best-quality reference model plus estimated savings.
-7. **Log** the decision locally for debugging and spend tracking.
+7. **Select** the winner and show the best-quality reference model plus estimated savings.
+8. **Log** the decision locally for debugging and spend tracking.
 
 See [`docs/architecture.md`](docs/architecture.md) for a deeper walkthrough.
 

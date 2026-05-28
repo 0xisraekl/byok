@@ -30,6 +30,7 @@ from fastapi.responses import JSONResponse
 from byok.core.classifier import TaskClassifier
 from byok.core.registry import ModelConfig, ModelRegistry
 from byok.core.router import ModelRouter, RoutingDecision
+from byok.core.token_budget import TokenBudgeter
 from byok.providers.anthropic_provider import AnthropicProvider
 from byok.providers.ollama_provider import OllamaProvider
 from byok.providers.openai_provider import OpenAIProvider
@@ -46,6 +47,7 @@ registry = ModelRegistry(CONFIG_PATH)
 spend_tracker = SpendTracker(DB_PATH)
 classifier = TaskClassifier()
 router = ModelRouter(registry, spend_tracker)
+token_budgeter = TokenBudgeter()
 
 # Holds the last routing decision so /v1/routing/last can return it
 _last_decision: Optional[dict] = None
@@ -158,6 +160,8 @@ async def chat_completions(request: Request):
 
     # ── Classify the task ─────────────────────────────────────────────────
     task = classifier.classify(messages, tools)
+    token_budget = token_budgeter.budget_for(task, route_mode, max_tokens)
+    max_tokens = token_budget.max_output_tokens
 
     # ── Route to best model ───────────────────────────────────────────────
     request_router = ModelRouter(registry, spend_tracker, mode=route_mode)
@@ -257,6 +261,13 @@ async def chat_completions(request: Request):
             "fallback_from": fallback_from,
             "fallback_errors": fallback_errors if fallback_from else [],
         },
+        "token_budget": {
+            "max_output_tokens": token_budget.max_output_tokens,
+            "raw_estimated_output_tokens": token_budget.raw_estimated_output_tokens,
+            "saved_tokens": token_budget.saved_tokens,
+            "savings_pct": round(token_budget.savings_pct, 1),
+            "reason": token_budget.reason,
+        },
         "usage": {
             "input_tokens": chat_response.input_tokens,
             "output_tokens": chat_response.output_tokens,
@@ -292,7 +303,10 @@ async def chat_completions(request: Request):
             "total_tokens": chat_response.input_tokens + chat_response.output_tokens,
         },
         # BYOK metadata — extra field your agent can optionally read
-        "byok": _last_decision["routing"] | {"cost_usd": round(cost, 6)},
+        "byok": _last_decision["routing"] | {
+            "cost_usd": round(cost, 6),
+            "token_budget": _last_decision["token_budget"],
+        },
     }
 
 

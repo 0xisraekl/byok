@@ -117,6 +117,7 @@ def route(message: str, task: str, tools: bool, private: bool, mode: str):
     from byok.core.classifier import TaskClassifier, PRIVACY_SIGNALS
     from byok.core.registry import ModelRegistry
     from byok.core.router import ModelRouter
+    from byok.core.token_budget import TokenBudgeter
     from byok.storage.spend_tracker import SpendTracker
 
     if not message:
@@ -139,6 +140,7 @@ def route(message: str, task: str, tools: bool, private: bool, mode: str):
         task_profile.task_type = task  # allow manual override
 
     decision = rtr.route(task_profile)
+    token_budget = TokenBudgeter().budget_for(task_profile, mode)
 
     # ── Display results ──────────────────────────────────────────────────
     console.print()
@@ -159,6 +161,15 @@ def route(message: str, task: str, tools: bool, private: bool, mode: str):
     t.add_row("Privacy required", "[red]yes[/red]" if task_profile.privacy_required else "no")
     t.add_row("Confidence", f"{task_profile.confidence:.0%}")
     console.print(Panel(t, title="Task Profile", border_style="blue"))
+
+    b = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+    b.add_column(style="dim")
+    b.add_column(style="bold")
+    b.add_row("Max output tokens", str(token_budget.max_output_tokens))
+    b.add_row("Raw estimate", str(token_budget.raw_estimated_output_tokens))
+    b.add_row("Saved tokens", f"{token_budget.saved_tokens} ({token_budget.savings_pct:.0f}%)")
+    b.add_row("Reason", token_budget.reason)
+    console.print(Panel(b, title="Token budget", border_style="magenta"))
 
     if decision is None:
         console.print("[red]✗ No model available for this task.[/red]")
@@ -233,6 +244,79 @@ def doctor():
         console.print("[yellow]BYOK can run, but warnings may limit routing options.[/yellow]\n")
     else:
         console.print("[green]BYOK setup looks healthy.[/green]\n")
+
+
+# ── byok specialties ──────────────────────────────────────────────────────────
+
+@cli.command()
+def specialties():
+    """Show which configured models are best for each task type."""
+    from byok.core.classifier import TaskProfile
+    from byok.core.registry import ModelRegistry
+    from byok.core.router import ModelRouter
+    from byok.storage.spend_tracker import SpendTracker
+
+    tasks = [
+        "coding",
+        "reasoning",
+        "math",
+        "writing",
+        "summarization",
+        "extraction",
+        "data_analysis",
+        "tool_calling",
+        "simple_chat",
+    ]
+    reg = ModelRegistry(CONFIG_PATH)
+    router = ModelRouter(reg, SpendTracker(DB_PATH), mode="balanced")
+    models_list = [m for m in reg.all_models() if m.enabled]
+
+    table = Table(title="Best models by task", box=box.ROUNDED, show_lines=True)
+    table.add_column("Task", style="cyan")
+    table.add_column("Best quality", style="bold green")
+    table.add_column("Best value", style="bold yellow")
+    table.add_column("Notes")
+
+    for task_type in tasks:
+        profile = TaskProfile(
+            task_type=task_type,
+            secondary_types=[],
+            difficulty="medium",
+            context_tokens=1000,
+            has_tools=(task_type == "tool_calling"),
+            privacy_required=False,
+            confidence=0.9,
+        )
+        candidates = [m for m in models_list if not profile.has_tools or m.supports_tools]
+        if not candidates:
+            table.add_row(task_type, "—", "—", "no configured model supports this task")
+            continue
+
+        ranked_quality = sorted(
+            candidates,
+            key=lambda m: (-router._quality_for(m, profile), router._estimate_cost(m, profile), m.priority),
+        )
+        value_candidates = [
+            m for m in candidates
+            if router._quality_for(m, profile) >= router.GOOD_ENOUGH_BY_DIFFICULTY[profile.difficulty]
+        ] or candidates
+        ranked_value = sorted(
+            value_candidates,
+            key=lambda m: (-(router._quality_for(m, profile) / max(router._estimate_cost(m, profile), 0.000001)), -router._quality_for(m, profile)),
+        )
+        best_quality = ranked_quality[0]
+        best_value = ranked_value[0]
+        q_score = router._quality_for(best_quality, profile)
+        v_score = router._quality_for(best_value, profile)
+        v_cost = router._estimate_cost(best_value, profile)
+        table.add_row(
+            task_type,
+            f"{best_quality.name} ({q_score:.0%})",
+            f"{best_value.name} ({v_score:.0%}, ${v_cost:.5f})",
+            "uses task_quality overrides when present",
+        )
+
+    console.print(table)
 
 
 # ── byok models ───────────────────────────────────────────────────────────────

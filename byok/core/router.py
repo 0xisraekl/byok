@@ -13,6 +13,7 @@ from typing import Optional
 
 from byok.core.classifier import TaskProfile
 from byok.core.registry import ModelConfig, ModelRegistry
+from byok.core.token_budget import TokenBudgeter
 from byok.storage.spend_tracker import SpendTracker
 
 
@@ -88,6 +89,7 @@ class ModelRouter:
         self.registry = registry
         self.spend_tracker = spend_tracker
         self.mode = mode
+        self.token_budgeter = TokenBudgeter()
 
     def route(self, task: TaskProfile) -> Optional[RoutingDecision]:
         candidates = self.registry.available_models()
@@ -138,7 +140,7 @@ class ModelRouter:
             reason=best_reason,
             alternatives=alternatives,
             estimated_cost_usd=best_cost,
-            estimated_output_tokens=self._estimate_output_tokens(task),
+            estimated_output_tokens=self.token_budgeter.budget_for(task, self.mode).max_output_tokens,
             quality_estimate=best_quality,
             best_quality_model=best_quality_model.name,
             premium_reference_cost_usd=premium_cost,
@@ -264,11 +266,13 @@ class ModelRouter:
         return max(0.0, min(0.99, base))
 
     def _estimate_output_tokens(self, task: TaskProfile) -> int:
-        by_difficulty = self.OUTPUT_TOKEN_ESTIMATES.get(task.task_type, {})
-        return by_difficulty.get(task.difficulty, 800)
+        return self.token_budgeter.estimate_output_tokens(task)
 
     def _estimate_cost(self, model: ModelConfig, task: TaskProfile) -> float:
-        output_tokens = self._estimate_output_tokens(task)
+        # Use the mode-aware token cap for selection. This means cheap/balanced
+        # modes do not merely pick cheaper models; they also account for the
+        # lower completion budget BYOK will send to the provider.
+        output_tokens = self.token_budgeter.budget_for(task, self.mode).max_output_tokens
         return (
             task.context_tokens * model.cost_per_1k_input / 1000
             + output_tokens * model.cost_per_1k_output / 1000
