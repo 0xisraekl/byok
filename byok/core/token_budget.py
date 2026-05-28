@@ -90,6 +90,67 @@ class TokenBudgeter:
             reason=", ".join(reason_parts),
         )
 
+    def budget_for_model_cost(
+        self,
+        task: TaskProfile,
+        cost_per_1k_input: float,
+        cost_per_1k_output: float,
+        mode: str = "balanced",
+        requested_max_tokens: Optional[int] = None,
+        max_cost_usd: Optional[float] = None,
+    ) -> TokenBudget:
+        """
+        Choose an output cap that respects both task needs and a request budget.
+
+        This is what lets a parent agent/sub-agent say "this call may spend at
+        most $0.002" and have BYOK reduce output tokens or skip models that
+        cannot fit.
+        """
+        budget = self.budget_for(task, mode, requested_max_tokens)
+        if max_cost_usd is None:
+            return budget
+
+        input_cost = task.context_tokens * cost_per_1k_input / 1000
+        if input_cost > max_cost_usd:
+            return TokenBudget(
+                max_output_tokens=0,
+                raw_estimated_output_tokens=budget.raw_estimated_output_tokens,
+                saved_tokens=budget.raw_estimated_output_tokens,
+                savings_pct=100.0,
+                reason=f"{budget.reason}, request cost ceiling already exceeded by input tokens",
+            )
+
+        if cost_per_1k_output <= 0:
+            return TokenBudget(
+                max_output_tokens=budget.max_output_tokens,
+                raw_estimated_output_tokens=budget.raw_estimated_output_tokens,
+                saved_tokens=budget.saved_tokens,
+                savings_pct=budget.savings_pct,
+                reason=f"{budget.reason}, output is free under request cost ceiling",
+            )
+
+        remaining = max_cost_usd - input_cost
+        affordable_output_tokens = int(remaining / cost_per_1k_output * 1000)
+        if affordable_output_tokens >= budget.max_output_tokens:
+            return TokenBudget(
+                max_output_tokens=budget.max_output_tokens,
+                raw_estimated_output_tokens=budget.raw_estimated_output_tokens,
+                saved_tokens=budget.saved_tokens,
+                savings_pct=budget.savings_pct,
+                reason=f"{budget.reason}, fits request cost ceiling",
+            )
+
+        capped = max(0, affordable_output_tokens)
+        saved = max(budget.raw_estimated_output_tokens - capped, 0)
+        savings_pct = (saved / budget.raw_estimated_output_tokens * 100) if budget.raw_estimated_output_tokens > 0 else 0.0
+        return TokenBudget(
+            max_output_tokens=capped,
+            raw_estimated_output_tokens=budget.raw_estimated_output_tokens,
+            saved_tokens=saved,
+            savings_pct=savings_pct,
+            reason=f"{budget.reason}, capped by request cost ceiling",
+        )
+
     def estimate_output_tokens(self, task: TaskProfile) -> int:
         by_difficulty = self.OUTPUT_TOKEN_ESTIMATES.get(
             task.task_type,

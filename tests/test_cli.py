@@ -21,6 +21,25 @@ def test_route_command_shows_token_budget():
     assert "Max output tokens" in result.output
 
 
+def test_route_command_accepts_request_cost_and_output_limits():
+    result = CliRunner().invoke(
+        cli,
+        [
+            "route",
+            "Write a Python function",
+            "--max-cost",
+            "0.001",
+            "--max-output-tokens",
+            "200",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Max cost" in result.output
+    assert "$0.00100" in result.output
+    assert "Token budget" in result.output
+
+
 def test_specialties_command_shows_best_models_by_task():
     result = CliRunner().invoke(cli, ["specialties"])
 

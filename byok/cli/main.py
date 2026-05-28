@@ -103,7 +103,17 @@ def serve(port: int, host: str, reload: bool):
     show_default=True,
     help="Routing mode: balanced, cheap, quality, private, or speed",
 )
-def route(message: str, task: str, tools: bool, private: bool, mode: str):
+@click.option("--max-cost", type=float, help="Maximum estimated USD cost allowed for this routed call")
+@click.option("--max-output-tokens", type=int, help="Maximum output tokens allowed for this routed call")
+def route(
+    message: str,
+    task: str,
+    tools: bool,
+    private: bool,
+    mode: str,
+    max_cost: float | None,
+    max_output_tokens: int | None,
+):
     """
     Classify a task and show which model BYOK would choose.
 
@@ -139,8 +149,22 @@ def route(message: str, task: str, tools: bool, private: bool, mode: str):
     if task:
         task_profile.task_type = task  # allow manual override
 
-    decision = rtr.route(task_profile)
-    token_budget = TokenBudgeter().budget_for(task_profile, mode)
+    decision = rtr.route(
+        task_profile,
+        max_cost_usd=max_cost,
+        requested_max_tokens=max_output_tokens,
+    )
+    if decision is not None:
+        token_budget = TokenBudgeter().budget_for_model_cost(
+            task=task_profile,
+            cost_per_1k_input=decision.selected_model.cost_per_1k_input,
+            cost_per_1k_output=decision.selected_model.cost_per_1k_output,
+            mode=mode,
+            requested_max_tokens=max_output_tokens,
+            max_cost_usd=max_cost,
+        )
+    else:
+        token_budget = TokenBudgeter().budget_for(task_profile, mode, max_output_tokens)
 
     # ── Display results ──────────────────────────────────────────────────
     console.print()
@@ -154,6 +178,8 @@ def route(message: str, task: str, tools: bool, private: bool, mode: str):
     t.add_column(style="dim")
     t.add_column(style="bold")
     t.add_row("Mode", f"[magenta]{mode}[/magenta]")
+    if max_cost is not None:
+        t.add_row("Max cost", f"${max_cost:.5f}")
     t.add_row("Task type", f"[cyan]{task_profile.task_type}[/cyan]")
     t.add_row("Difficulty", task_profile.difficulty)
     t.add_row("Context tokens", str(task_profile.context_tokens))

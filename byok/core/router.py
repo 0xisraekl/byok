@@ -91,18 +91,23 @@ class ModelRouter:
         self.mode = mode
         self.token_budgeter = TokenBudgeter()
 
-    def route(self, task: TaskProfile) -> Optional[RoutingDecision]:
+    def route(
+        self,
+        task: TaskProfile,
+        max_cost_usd: Optional[float] = None,
+        requested_max_tokens: Optional[int] = None,
+    ) -> Optional[RoutingDecision]:
         candidates = self.registry.available_models()
         if not candidates:
             return None
 
         scored: list[tuple[ModelConfig, float, str, float, float]] = []
         for model in candidates:
-            score, reason = self._score(model, task)
+            score, reason = self._score(model, task, max_cost_usd, requested_max_tokens)
             if score == float("-inf"):
                 continue
             quality = self._quality_for(model, task)
-            cost = self._estimate_cost(model, task)
+            cost = self._estimate_cost(model, task, max_cost_usd, requested_max_tokens)
             scored.append((model, score, reason, quality, cost))
 
         if not scored:
@@ -133,6 +138,14 @@ class ModelRouter:
         savings_pct = (savings_usd / premium_cost * 100) if premium_cost > 0 else 0.0
 
         alternatives = [(m.name, s) for m, s, _, _, _ in scored if m.name != best_model.name][:3]
+        selected_budget = self.token_budgeter.budget_for_model_cost(
+            task=task,
+            cost_per_1k_input=best_model.cost_per_1k_input,
+            cost_per_1k_output=best_model.cost_per_1k_output,
+            mode=self.mode,
+            requested_max_tokens=requested_max_tokens,
+            max_cost_usd=max_cost_usd,
+        )
 
         return RoutingDecision(
             selected_model=best_model,
@@ -140,7 +153,7 @@ class ModelRouter:
             reason=best_reason,
             alternatives=alternatives,
             estimated_cost_usd=best_cost,
-            estimated_output_tokens=self.token_budgeter.budget_for(task, self.mode).max_output_tokens,
+            estimated_output_tokens=selected_budget.max_output_tokens,
             quality_estimate=best_quality,
             best_quality_model=best_quality_model.name,
             premium_reference_cost_usd=premium_cost,
@@ -148,11 +161,31 @@ class ModelRouter:
             estimated_savings_pct=savings_pct,
         )
 
-    def _score(self, model: ModelConfig, task: TaskProfile) -> tuple[float, str]:
+    def _score(
+        self,
+        model: ModelConfig,
+        task: TaskProfile,
+        max_cost_usd: Optional[float] = None,
+        requested_max_tokens: Optional[int] = None,
+    ) -> tuple[float, str]:
         reasons: list[str] = []
-        cost = self._estimate_cost(model, task)
+        token_budget = self.token_budgeter.budget_for_model_cost(
+            task=task,
+            cost_per_1k_input=model.cost_per_1k_input,
+            cost_per_1k_output=model.cost_per_1k_output,
+            mode=self.mode,
+            requested_max_tokens=requested_max_tokens,
+            max_cost_usd=max_cost_usd,
+        )
+        cost = self._estimate_cost(model, task, max_cost_usd, requested_max_tokens)
 
         # Hard filters
+        if max_cost_usd is not None and token_budget.max_output_tokens <= 0:
+            return float("-inf"), "request cost limit leaves no output token budget"
+
+        if max_cost_usd is not None and cost > max_cost_usd:
+            return float("-inf"), f"estimated cost ${cost:.5f} exceeds request limit ${max_cost_usd:.5f}"
+
         if model.spend_limit_monthly_usd > 0:
             monthly_spend = self.spend_tracker.get_monthly_spend(model.name)
             if monthly_spend >= model.spend_limit_monthly_usd:
@@ -274,11 +307,24 @@ class ModelRouter:
     def _estimate_output_tokens(self, task: TaskProfile) -> int:
         return self.token_budgeter.estimate_output_tokens(task)
 
-    def _estimate_cost(self, model: ModelConfig, task: TaskProfile) -> float:
+    def _estimate_cost(
+        self,
+        model: ModelConfig,
+        task: TaskProfile,
+        max_cost_usd: Optional[float] = None,
+        requested_max_tokens: Optional[int] = None,
+    ) -> float:
         # Use the mode-aware token cap for selection. This means cheap/balanced
         # modes do not merely pick cheaper models; they also account for the
         # lower completion budget BYOK will send to the provider.
-        output_tokens = self.token_budgeter.budget_for(task, self.mode).max_output_tokens
+        output_tokens = self.token_budgeter.budget_for_model_cost(
+            task=task,
+            cost_per_1k_input=model.cost_per_1k_input,
+            cost_per_1k_output=model.cost_per_1k_output,
+            mode=self.mode,
+            requested_max_tokens=requested_max_tokens,
+            max_cost_usd=max_cost_usd,
+        ).max_output_tokens
         return (
             task.context_tokens * model.cost_per_1k_input / 1000
             + output_tokens * model.cost_per_1k_output / 1000

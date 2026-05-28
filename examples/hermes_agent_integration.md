@@ -144,6 +144,7 @@ If your Hermes setup can attach extra request metadata, BYOK also accepts explic
     "task": "coding",
     "agent": "coder",
     "mode": "quality",
+    "max_cost_usd": 0.004,
     "max_output_tokens": 1200
   }
 }
@@ -156,3 +157,14 @@ If Hermes only lets you control prompt text, add a compact hint:
 ```
 
 This is optional. BYOK still classifies normal prompts automatically, but hints make short sub-agent tasks much more reliable.
+
+For cost distribution, give each sub-agent a per-call budget:
+
+```text
+planner agent  → {"byok": {"task": "reasoning", "mode": "quality", "max_cost_usd": 0.010}}
+coder agent    → {"byok": {"task": "coding", "mode": "balanced", "max_cost_usd": 0.004}}
+tool agent     → {"byok": {"task": "tool_calling", "mode": "speed", "max_cost_usd": 0.003}}
+writer agent   → {"byok": {"task": "writing", "mode": "cheap", "max_cost_usd": 0.001}}
+```
+
+BYOK uses that budget during routing. If a premium model would exceed the limit, it tries a cheaper capable model. If the selected model can fit only with a shorter answer, BYOK lowers `max_tokens` before forwarding the request.

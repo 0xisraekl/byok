@@ -7,6 +7,7 @@ from byok.proxy.server import (
     _apply_byok_metadata,
     _attempt_models,
     _mode_from_request,
+    _optional_float,
     _strip_byok_hints_from_messages,
 )
 
@@ -104,3 +105,10 @@ def test_strip_byok_hints_before_provider_forwarding():
     assert cleaned[0]["content"] == "Handle this."
     assert cleaned[1]["content"][0]["text"] == "Please solve."
     assert cleaned[1]["content"][1] == messages[1]["content"][1]
+
+
+def test_optional_float_parses_request_budget_values():
+    assert _optional_float("0.0025") == 0.0025
+    assert _optional_float(1) == 1.0
+    assert _optional_float("-1") is None
+    assert _optional_float("not-a-number") is None

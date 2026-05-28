@@ -160,6 +160,11 @@ async def chat_completions(request: Request):
         or byok_meta.get("max_output_tokens")
         or byok_meta.get("max_tokens")
     )
+    max_cost_usd = _optional_float(
+        byok_meta.get("max_cost_usd")
+        or byok_meta.get("budget_usd")
+        or body.get("byok_max_cost_usd")
+    )
     requested_model: str = body.get("model", "auto")
     route_mode = _mode_from_request(requested_model, body.get("byok_mode") or byok_meta.get("mode"))
 
@@ -170,12 +175,10 @@ async def chat_completions(request: Request):
     task = classifier.classify(messages, tools)
     task = _apply_byok_metadata(task, byok_meta)
     provider_messages = _strip_byok_hints_from_messages(messages)
-    token_budget = token_budgeter.budget_for(task, route_mode, max_tokens)
-    max_tokens = token_budget.max_output_tokens
 
     # ── Route to best model ───────────────────────────────────────────────
     request_router = ModelRouter(registry, spend_tracker, mode=route_mode)
-    decision = request_router.route(task)
+    decision = request_router.route(task, max_cost_usd=max_cost_usd, requested_max_tokens=max_tokens)
 
     if decision is None:
         raise HTTPException(
@@ -188,6 +191,15 @@ async def chat_completions(request: Request):
         )
 
     model = decision.selected_model
+    token_budget = token_budgeter.budget_for_model_cost(
+        task=task,
+        cost_per_1k_input=model.cost_per_1k_input,
+        cost_per_1k_output=model.cost_per_1k_output,
+        mode=route_mode,
+        requested_max_tokens=max_tokens,
+        max_cost_usd=max_cost_usd,
+    )
+    max_tokens = token_budget.max_output_tokens
 
     # ── Call the selected provider, with transparent fallback ──────────────
     # The router's first choice is still the product decision. If that
@@ -279,6 +291,7 @@ async def chat_completions(request: Request):
             "saved_tokens": token_budget.saved_tokens,
             "savings_pct": round(token_budget.savings_pct, 1),
             "reason": token_budget.reason,
+            "request_max_cost_usd": max_cost_usd,
         },
         "usage": {
             "input_tokens": chat_response.input_tokens,
@@ -414,6 +427,16 @@ def _truthy(value: Any) -> bool:
     if value is None:
         return False
     return str(value).strip().lower() in {"1", "true", "yes", "on", "local"}
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
 
 
 def _strip_byok_hints_from_messages(messages: list[dict]) -> list[dict]:

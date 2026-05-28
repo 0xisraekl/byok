@@ -187,6 +187,69 @@ class TestSpendLimits:
         assert decision is not None
 
 
+class TestRequestCostLimits:
+
+    def test_request_cost_limit_routes_to_affordable_model(self, spend_tracker):
+        expensive = make_model(
+            name="expensive",
+            strengths=["coding"],
+            task_quality={"coding": 0.95},
+            cost_per_1k_input=0.01,
+            cost_per_1k_output=0.05,
+        )
+        affordable = make_model(
+            name="affordable",
+            strengths=["coding"],
+            task_quality={"coding": 0.82},
+            cost_per_1k_input=0.0004,
+            cost_per_1k_output=0.0016,
+        )
+        router = ModelRouter(FakeRegistry([expensive, affordable]), spend_tracker, mode="balanced")
+
+        decision = router.route(
+            make_profile(task_type="coding", difficulty="medium", context_tokens=1000),
+            max_cost_usd=0.003,
+        )
+
+        assert decision is not None
+        assert decision.selected_model.name == "affordable"
+        assert decision.estimated_cost_usd <= 0.003
+
+    def test_request_cost_limit_can_reduce_estimated_output_tokens(self, spend_tracker):
+        model = make_model(
+            name="bounded",
+            strengths=["coding"],
+            cost_per_1k_input=0.001,
+            cost_per_1k_output=0.01,
+        )
+        router = ModelRouter(FakeRegistry([model]), spend_tracker, mode="quality")
+
+        decision = router.route(
+            make_profile(task_type="coding", difficulty="medium", context_tokens=1000),
+            max_cost_usd=0.006,
+        )
+
+        assert decision is not None
+        assert decision.estimated_output_tokens == 500
+        assert decision.estimated_cost_usd <= 0.006
+
+    def test_request_cost_limit_returns_none_when_no_output_budget_fits(self, spend_tracker):
+        model = make_model(
+            name="too-expensive",
+            strengths=["summarization"],
+            cost_per_1k_input=0.01,
+            cost_per_1k_output=0.01,
+        )
+        router = ModelRouter(FakeRegistry([model]), spend_tracker)
+
+        decision = router.route(
+            make_profile(task_type="summarization", context_tokens=1000),
+            max_cost_usd=0.001,
+        )
+
+        assert decision is None
+
+
 # ── Privacy enforcement ────────────────────────────────────────────────────────
 
 class TestPrivacyRouting:

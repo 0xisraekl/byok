@@ -84,6 +84,7 @@ It is not production-ready yet. I'm building it in public as I learn.
 - **Cheapest good-enough mode** — avoid wasting premium models on extraction, classification, summaries, and easy chat
 - **Savings visibility** — every routing decision can show estimated cost, best-quality reference model, and estimated savings
 - **Token budgets** — cap output tokens by task/difficulty/mode so cheap/balanced requests do not ramble and burn money
+- **Request cost ceilings** — set a per-call budget like `$0.002`; BYOK routes to models that fit and reduces output tokens when needed
 - **Model specialties view** — inspect which configured model is best quality vs best value for coding, writing, extraction, etc.
 - **Spend limits** — set a monthly USD cap per model
 - **Projected spend guardrails** — BYOK skips a model if the estimated next call would push it over its configured monthly cap
@@ -168,6 +169,7 @@ byok route "Search and summarize today's news" --tools
 byok route "Draft a quick email" --mode cheap
 byok route "Debug this production issue" --mode quality
 byok route "Summarize this customer data" --mode private
+byok route "Run this coder sub-agent step" --max-cost 0.002 --max-output-tokens 800
 
 # Inspect configured models
 byok models
@@ -187,10 +189,10 @@ byok spend
 ## How routing works
 
 1. **Classify** the incoming request by task type and difficulty.
-2. **Filter** out models that are disabled, over budget, missing required tool support, too small for the context, or not local when privacy mode is required.
+2. **Filter** out models that are disabled, over budget, projected to exceed budget on the next call, missing required tool support, too small for the context, or not local when privacy mode is required.
 3. **Estimate task-specific quality** using each model's general `quality_score` and optional `task_quality` overrides.
 4. **Estimate cost** from input tokens, mode-aware output token budget, and configured per-1k token pricing.
-5. **Apply a token budget** by task/difficulty/mode so easy or cost-sensitive requests get shorter max output caps.
+5. **Apply a token budget** by task/difficulty/mode and optional per-request cost ceiling so easy or cost-sensitive requests get shorter max output caps.
 6. **Score for the selected mode**:
    - `balanced`: near-best quality at lower cost when possible
    - `cheap`: cheapest model that clears the quality floor
@@ -234,6 +236,7 @@ For frameworks that can pass custom request fields, use explicit metadata:
     "task": "coding",
     "agent": "coder",
     "mode": "quality",
+    "max_cost_usd": 0.002,
     "max_output_tokens": 1200
   }
 }
@@ -246,6 +249,8 @@ For frameworks that can only pass prompt text, add a lightweight hint:
 ```
 
 Supported task hints are: `coding`, `reasoning`, `math`, `writing`, `summarization`, `extraction`, `data_analysis`, `tool_calling`, and `simple_chat`.
+
+Use `max_cost_usd` when distributing work across sub-agents. For example, a planning agent can get `0.01`, a coder sub-agent can get `0.004`, and a final summarizer can get `0.001`. BYOK will pick the best model that fits that call budget and lower the output cap if needed.
 
 ---
 

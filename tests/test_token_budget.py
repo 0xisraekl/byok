@@ -53,3 +53,30 @@ def test_easy_simple_chat_gets_tight_default_budget():
 
     assert budget.max_output_tokens <= 100
     assert budget.saved_tokens > 0
+
+
+def test_cost_ceiling_caps_output_tokens_for_paid_model():
+    budget = TokenBudgeter().budget_for_model_cost(
+        make_profile(task_type="coding", difficulty="medium", context_tokens=1000),
+        cost_per_1k_input=0.001,
+        cost_per_1k_output=0.01,
+        mode="quality",
+        max_cost_usd=0.006,
+    )
+
+    # $0.001 input leaves $0.005 for output at $0.01 / 1k = 500 tokens.
+    assert budget.max_output_tokens == 500
+    assert "request cost ceiling" in budget.reason
+
+
+def test_cost_ceiling_returns_zero_when_input_already_exceeds_budget():
+    budget = TokenBudgeter().budget_for_model_cost(
+        make_profile(task_type="summarization", difficulty="medium", context_tokens=10000),
+        cost_per_1k_input=0.001,
+        cost_per_1k_output=0.002,
+        mode="balanced",
+        max_cost_usd=0.001,
+    )
+
+    assert budget.max_output_tokens == 0
+    assert budget.savings_pct == 100.0
