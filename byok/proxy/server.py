@@ -22,7 +22,7 @@ from __future__ import annotations
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Protocol
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -80,7 +80,7 @@ async def root():
             "hermes_agent": "Set base_url='http://localhost:8000/v1' and api_key='byok'",
             "test_with_curl": (
                 "curl http://localhost:8000/v1/chat/completions "
-                "-H 'Authorization: Bearer byok' "
+                "-H 'Authorization: Bearer *** "
                 "-H 'Content-Type: application/json' "
                 "-d '{\"model\": \"auto\", \"messages\": [{\"role\": \"user\", \"content\": \"hello\"}]}'"
             ),
@@ -175,22 +175,43 @@ async def chat_completions(request: Request):
 
     model = decision.selected_model
 
-    # ── Call the selected provider ────────────────────────────────────────
-    try:
-        provider = _get_provider(model)
-        chat_response = await provider.chat_completion(
-            model_id=model.model_id,
-            messages=messages,
-            tools=tools if tools else None,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-    except Exception as exc:
-        # If the chosen model fails, we could add fallback logic here in V2.
+    # ── Call the selected provider, with transparent fallback ──────────────
+    # The router's first choice is still the product decision. If that
+    # provider is temporarily down/rate-limited, try the ranked runners-up
+    # instead of failing the whole request. This is a big practical reliability
+    # win for BYOK because users often bring multiple keys/providers.
+    attempted_models: list[str] = []
+    fallback_errors: list[dict[str, str]] = []
+    chat_response = None
+    selected_by_router = model.name
+
+    for attempt_model in _attempt_models(decision, registry):
+        attempted_models.append(attempt_model.name)
+        try:
+            provider = _get_provider(attempt_model)
+            chat_response = await provider.chat_completion(
+                model_id=attempt_model.model_id,
+                messages=messages,
+                tools=tools if tools else None,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            model = attempt_model
+            break
+        except Exception as exc:
+            fallback_errors.append({"model": attempt_model.name, "error": str(exc)})
+
+    if chat_response is None:
         raise HTTPException(
             status_code=502,
-            detail=f"Provider error ({model.name}): {str(exc)}",
+            detail={
+                "message": "All routed provider attempts failed.",
+                "attempted_models": attempted_models,
+                "errors": fallback_errors,
+            },
         )
+
+    fallback_from = selected_by_router if model.name != selected_by_router else None
 
     # ── Calculate cost and log ────────────────────────────────────────────
     cost = (
@@ -232,6 +253,9 @@ async def chat_completions(request: Request):
             "estimated_savings_usd": round(decision.estimated_savings_usd, 6) if decision.estimated_savings_usd is not None else None,
             "estimated_savings_pct": round(decision.estimated_savings_pct, 1) if decision.estimated_savings_pct is not None else None,
             "alternatives": decision.alternatives,
+            "attempted_models": attempted_models,
+            "fallback_from": fallback_from,
+            "fallback_errors": fallback_errors if fallback_from else [],
         },
         "usage": {
             "input_tokens": chat_response.input_tokens,
@@ -275,6 +299,33 @@ async def chat_completions(request: Request):
 # ─────────────────────────────────────────────────────────────────────────────
 #  Request helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+class ModelLookup(Protocol):
+    def get(self, name: str) -> Optional[ModelConfig]: ...
+
+
+def _attempt_models(decision: RoutingDecision, model_registry: ModelLookup) -> list[ModelConfig]:
+    """Return selected model followed by ranked fallback candidates.
+
+    `RoutingDecision.alternatives` intentionally stores lightweight
+    `(model_name, score)` tuples for logs/API responses. The proxy expands those
+    names back to configs when it needs to retry after a provider failure.
+    """
+    attempts: list[ModelConfig] = [decision.selected_model]
+    seen = {decision.selected_model.name}
+
+    for model_name, _score in decision.alternatives:
+        if model_name in seen:
+            continue
+        model = model_registry.get(model_name)
+        if model is None:
+            continue
+        attempts.append(model)
+        seen.add(model.name)
+
+    return attempts
+
 
 def _mode_from_request(requested_model: str, explicit_mode: Optional[str]) -> str:
     """Support OpenAI-compatible model names like auto:cheap / auto:quality."""
@@ -321,3 +372,4 @@ def _get_provider(model: ModelConfig):
         f"Unknown provider '{model.provider}' for model '{model.name}'. "
         "Supported: openai, anthropic, ollama, openai_compatible"
     )
+
