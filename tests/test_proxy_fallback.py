@@ -3,10 +3,14 @@
 from byok.core.registry import ModelConfig
 from byok.core.router import RoutingDecision
 from byok.core.classifier import TaskProfile
+from byok.core.policy import RoutingPolicy
 from byok.proxy.server import (
     _apply_byok_metadata,
+    _apply_policy_task,
     _attempt_models,
+    _has_explicit_task_hint,
     _mode_from_request,
+    _mode_from_request_optional,
     _optional_float,
     _strip_byok_hints_from_messages,
 )
@@ -65,6 +69,11 @@ def test_mode_from_request_reads_explicit_byok_mode():
     assert _mode_from_request("auto", "quality") == "quality"
 
 
+def test_mode_from_request_optional_returns_none_without_request_mode():
+    assert _mode_from_request_optional("auto", None) is None
+    assert _mode_from_request_optional("auto:cheap", None) == "cheap"
+
+
 def test_apply_byok_metadata_overrides_task_agent_and_privacy():
     task = TaskProfile(
         task_type="simple_chat",
@@ -86,6 +95,43 @@ def test_apply_byok_metadata_overrides_task_agent_and_privacy():
     assert updated.agent_role == "coder"
     assert updated.privacy_required is True
     assert updated.route_hints["task"] == "coding"
+
+
+def test_policy_task_applies_when_request_has_no_task_hint():
+    task = TaskProfile(
+        task_type="simple_chat",
+        secondary_types=[],
+        difficulty="easy",
+        context_tokens=20,
+        has_tools=False,
+        privacy_required=False,
+        confidence=0.8,
+        agent_role="coder",
+    )
+    policy = RoutingPolicy("config/routing_policy.yaml")
+
+    updated = _apply_policy_task(task, policy, explicit_task=False)
+
+    assert updated.task_type == "coding"
+
+
+def test_policy_task_does_not_override_explicit_task_hint():
+    task = TaskProfile(
+        task_type="math",
+        secondary_types=[],
+        difficulty="easy",
+        context_tokens=20,
+        has_tools=False,
+        privacy_required=False,
+        confidence=0.8,
+        agent_role="coder",
+        route_hints={"task": "math"},
+    )
+    policy = RoutingPolicy("config/routing_policy.yaml")
+
+    updated = _apply_policy_task(task, policy, explicit_task=_has_explicit_task_hint({}, task))
+
+    assert updated.task_type == "math"
 
 
 def test_strip_byok_hints_before_provider_forwarding():

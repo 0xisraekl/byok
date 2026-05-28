@@ -79,6 +79,7 @@ It is not production-ready yet. I'm building it in public as I learn.
 - **Configurable model pool** — define available models in `config/models.yaml`
 - **Task-aware routing** — coding, reasoning, math, writing, summarization, extraction, data analysis, tool-calling, simple chat
 - **Sub-agent-aware routing** — system prompts like "coding agent", "research agent", or "writer sub-agent" bias routing toward the right model for that agent's role
+- **Sub-agent policy file** — tune default mode, per-call budget, and output cap for each agent role in `config/routing_policy.yaml`
 - **Optional routing hints** — pass `[byok:task=coding,agent=coder,privacy=true]` in prompt text or a `byok` metadata object in proxy requests
 - **Quality-aware model selection** — per-model and per-task quality priors so Claude can win writing/coding, GPT can win structured/tool tasks, Gemini/OpenRouter can win long cheap summaries, etc.
 - **Cheapest good-enough mode** — avoid wasting premium models on extraction, classification, summaries, and easy chat
@@ -170,6 +171,7 @@ byok route "Draft a quick email" --mode cheap
 byok route "Debug this production issue" --mode quality
 byok route "Summarize this customer data" --mode private
 byok route "Run this coder sub-agent step" --max-cost 0.002 --max-output-tokens 800
+byok route "Handle this next step" --agent coder
 
 # Inspect configured models
 byok models
@@ -252,6 +254,31 @@ Supported task hints are: `coding`, `reasoning`, `math`, `writing`, `summarizati
 
 Use `max_cost_usd` when distributing work across sub-agents. For example, a planning agent can get `0.01`, a coder sub-agent can get `0.004`, and a final summarizer can get `0.001`. BYOK will pick the best model that fits that call budget and lower the output cap if needed.
 
+You can also set these defaults once in `config/routing_policy.yaml`:
+
+```yaml
+agents:
+  coding_agent:
+    task: coding
+    mode: balanced
+    max_cost_usd: 0.004
+    max_output_tokens: 1200
+
+  research_agent:
+    task: reasoning
+    mode: quality
+    max_cost_usd: 0.010
+    max_output_tokens: 2000
+
+  writing_agent:
+    task: writing
+    mode: cheap
+    max_cost_usd: 0.002
+    max_output_tokens: 900
+```
+
+If a request says it is from `coder`, `coding_agent`, or a system prompt like "You are a coding agent", BYOK applies the coding policy automatically. Request metadata still wins when you need an exception.
+
 ---
 
 ## Project structure
@@ -268,7 +295,8 @@ byok/
 │   ├── storage/               # SQLite spend/routing tracker
 │   └── cli/                   # byok CLI
 ├── config/
-│   └── models.yaml            # Model pool configuration
+│   ├── models.yaml            # Model pool configuration
+│   └── routing_policy.yaml    # Sub-agent mode/cost/token defaults
 ├── docs/
 │   └── architecture.md
 ├── examples/

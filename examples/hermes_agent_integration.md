@@ -168,3 +168,34 @@ writer agent   → {"byok": {"task": "writing", "mode": "cheap", "max_cost_usd":
 ```
 
 BYOK uses that budget during routing. If a premium model would exceed the limit, it tries a cheaper capable model. If the selected model can fit only with a shorter answer, BYOK lowers `max_tokens` before forwarding the request.
+
+You can avoid repeating those budgets by editing `config/routing_policy.yaml`:
+
+```yaml
+agents:
+  coding_agent:
+    task: coding
+    mode: balanced
+    max_cost_usd: 0.004
+    max_output_tokens: 1200
+
+  research_agent:
+    task: reasoning
+    mode: quality
+    max_cost_usd: 0.010
+    max_output_tokens: 2000
+
+  tool_agent:
+    task: tool_calling
+    mode: speed
+    max_cost_usd: 0.003
+    max_output_tokens: 700
+
+  writing_agent:
+    task: writing
+    mode: cheap
+    max_cost_usd: 0.002
+    max_output_tokens: 900
+```
+
+Now a Hermes sub-agent with a system prompt like `You are a coding agent and senior software engineer` automatically gets the coding task, balanced mode, `$0.004` cost ceiling, and `1200` max output token cap unless the request explicitly overrides it.

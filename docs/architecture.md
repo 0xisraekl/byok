@@ -111,6 +111,8 @@ Common filters:
 - disabled model
 - missing API key
 - over spend limit
+- projected next call would exceed spend limit
+- request-level cost ceiling cannot fit the prompt/output budget
 - insufficient context window
 - lacks tool support
 - cloud model when privacy mode requires local
@@ -130,6 +132,7 @@ Scoring considers:
 - per-task quality priors
 - estimated request cost
 - estimated output length by task/difficulty
+- optional request-level cost ceiling
 - latency
 - local preference
 - priority
@@ -145,6 +148,33 @@ The router also reports:
 - estimated savings when a cheaper near-best model wins
 
 The router should always return a human-readable reason for the selection.
+
+---
+
+### 4.1 Sub-agent routing policy
+
+`config/routing_policy.yaml` defines defaults for detected sub-agent roles.
+
+Example:
+
+```yaml
+agents:
+  coding_agent:
+    task: coding
+    mode: balanced
+    max_cost_usd: 0.004
+    max_output_tokens: 1200
+```
+
+The policy layer runs after classification and before routing:
+
+1. The classifier detects a role from prompt text, such as `coding_agent`.
+2. BYOK loads the matching policy defaults.
+3. Policy can set task type, routing mode, max cost, and max output tokens.
+4. Explicit request metadata still overrides policy defaults.
+
+This makes Hermes/OpenClaw multi-agent routing practical: each sub-agent can
+inherit its own budget and routing mode without modifying framework internals.
 
 ---
 

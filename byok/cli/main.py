@@ -98,11 +98,11 @@ def serve(port: int, host: str, reload: bool):
 @click.option("--private", is_flag=True, help="Simulate a private/local-only request")
 @click.option(
     "--mode",
-    default="balanced",
+    default=None,
     type=click.Choice(["balanced", "cheap", "quality", "private", "speed"]),
-    show_default=True,
-    help="Routing mode: balanced, cheap, quality, private, or speed",
+    help="Routing mode: balanced, cheap, quality, private, or speed. Overrides agent policy.",
 )
+@click.option("--agent", help="Simulate a sub-agent role, e.g. coder, research_agent, writer")
 @click.option("--max-cost", type=float, help="Maximum estimated USD cost allowed for this routed call")
 @click.option("--max-output-tokens", type=int, help="Maximum output tokens allowed for this routed call")
 def route(
@@ -110,7 +110,8 @@ def route(
     task: str,
     tools: bool,
     private: bool,
-    mode: str,
+    mode: str | None,
+    agent: str | None,
     max_cost: float | None,
     max_output_tokens: int | None,
 ):
@@ -125,6 +126,7 @@ def route(
         byok route "Analyze these contracts" --private
     """
     from byok.core.classifier import TaskClassifier, PRIVACY_SIGNALS
+    from byok.core.policy import RoutingPolicy
     from byok.core.registry import ModelRegistry
     from byok.core.router import ModelRouter
     from byok.core.token_budget import TokenBudgeter
@@ -134,9 +136,9 @@ def route(
         message = click.prompt("Enter a task message")
 
     reg = ModelRegistry(CONFIG_PATH)
+    policy = RoutingPolicy(Path(__file__).parent.parent.parent / "config" / "routing_policy.yaml")
     tracker = SpendTracker(DB_PATH)
     clf = TaskClassifier()
-    rtr = ModelRouter(reg, tracker, mode=mode)
 
     # Build a fake messages list
     messages = [{"role": "user", "content": message}]
@@ -145,26 +147,40 @@ def route(
 
     fake_tools = [{"type": "function", "function": {"name": "search"}}] if tools else []
     task_profile = clf.classify(messages, fake_tools)
+    if agent:
+        task_profile.agent_role = agent
 
     if task:
         task_profile.task_type = task  # allow manual override
+    elif task_profile.agent_role:
+        policy_task = policy.task_for_agent(task_profile.agent_role)
+        if policy_task:
+            task_profile.task_type = policy_task
+
+    controls = policy.controls_for(
+        agent_role=task_profile.agent_role,
+        explicit_mode=mode,
+        explicit_max_cost_usd=max_cost,
+        explicit_max_output_tokens=max_output_tokens,
+    )
+    rtr = ModelRouter(reg, tracker, mode=controls.mode)
 
     decision = rtr.route(
         task_profile,
-        max_cost_usd=max_cost,
-        requested_max_tokens=max_output_tokens,
+        max_cost_usd=controls.max_cost_usd,
+        requested_max_tokens=controls.max_output_tokens,
     )
     if decision is not None:
         token_budget = TokenBudgeter().budget_for_model_cost(
             task=task_profile,
             cost_per_1k_input=decision.selected_model.cost_per_1k_input,
             cost_per_1k_output=decision.selected_model.cost_per_1k_output,
-            mode=mode,
-            requested_max_tokens=max_output_tokens,
-            max_cost_usd=max_cost,
+            mode=controls.mode,
+            requested_max_tokens=controls.max_output_tokens,
+            max_cost_usd=controls.max_cost_usd,
         )
     else:
-        token_budget = TokenBudgeter().budget_for(task_profile, mode, max_output_tokens)
+        token_budget = TokenBudgeter().budget_for(task_profile, controls.mode, controls.max_output_tokens)
 
     # ── Display results ──────────────────────────────────────────────────
     console.print()
@@ -177,9 +193,12 @@ def route(
     t = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
     t.add_column(style="dim")
     t.add_column(style="bold")
-    t.add_row("Mode", f"[magenta]{mode}[/magenta]")
-    if max_cost is not None:
-        t.add_row("Max cost", f"${max_cost:.5f}")
+    t.add_row("Mode", f"[magenta]{controls.mode}[/magenta]")
+    t.add_row("Policy source", controls.source)
+    if task_profile.agent_role:
+        t.add_row("Agent role", task_profile.agent_role)
+    if controls.max_cost_usd is not None:
+        t.add_row("Max cost", f"${controls.max_cost_usd:.5f}")
     t.add_row("Task type", f"[cyan]{task_profile.task_type}[/cyan]")
     t.add_row("Difficulty", task_profile.difficulty)
     t.add_row("Context tokens", str(task_profile.context_tokens))

@@ -30,6 +30,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from byok.core.classifier import TASK_SIGNALS, TaskClassifier, TaskProfile
+from byok.core.policy import RoutingPolicy
 from byok.core.registry import ModelConfig, ModelRegistry
 from byok.core.router import ModelRouter, RoutingDecision
 from byok.core.token_budget import TokenBudgeter
@@ -43,9 +44,11 @@ from byok.storage.spend_tracker import SpendTracker
 # ─────────────────────────────────────────────────────────────────────────────
 
 CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "models.yaml"
+POLICY_PATH = Path(__file__).parent.parent.parent / "config" / "routing_policy.yaml"
 DB_PATH = Path("byok.db")
 
 registry = ModelRegistry(CONFIG_PATH)
+routing_policy = RoutingPolicy(POLICY_PATH)
 spend_tracker = SpendTracker(DB_PATH)
 classifier = TaskClassifier()
 router = ModelRouter(registry, spend_tracker)
@@ -154,19 +157,19 @@ async def chat_completions(request: Request):
     tools: list = body.get("tools", [])
     temperature: float = body.get("temperature", 0.7)
     byok_meta: dict[str, Any] = body.get("byok") if isinstance(body.get("byok"), dict) else {}
-    max_tokens: Optional[int] = (
+    requested_max_tokens: Optional[int] = (
         body.get("max_tokens")
         or body.get("max_completion_tokens")
         or byok_meta.get("max_output_tokens")
         or byok_meta.get("max_tokens")
     )
-    max_cost_usd = _optional_float(
+    explicit_max_cost_usd = _optional_float(
         byok_meta.get("max_cost_usd")
         or byok_meta.get("budget_usd")
         or body.get("byok_max_cost_usd")
     )
     requested_model: str = body.get("model", "auto")
-    route_mode = _mode_from_request(requested_model, body.get("byok_mode") or byok_meta.get("mode"))
+    explicit_mode = _mode_from_request_optional(requested_model, body.get("byok_mode") or byok_meta.get("mode"))
 
     if not messages:
         raise HTTPException(status_code=400, detail="messages field is required")
@@ -174,11 +177,22 @@ async def chat_completions(request: Request):
     # ── Classify the task ─────────────────────────────────────────────────
     task = classifier.classify(messages, tools)
     task = _apply_byok_metadata(task, byok_meta)
+    task = _apply_policy_task(task, routing_policy, explicit_task=_has_explicit_task_hint(byok_meta, task))
+    route_controls = routing_policy.controls_for(
+        agent_role=task.agent_role,
+        explicit_mode=explicit_mode,
+        explicit_max_cost_usd=explicit_max_cost_usd,
+        explicit_max_output_tokens=_optional_int(requested_max_tokens),
+    )
     provider_messages = _strip_byok_hints_from_messages(messages)
 
     # ── Route to best model ───────────────────────────────────────────────
-    request_router = ModelRouter(registry, spend_tracker, mode=route_mode)
-    decision = request_router.route(task, max_cost_usd=max_cost_usd, requested_max_tokens=max_tokens)
+    request_router = ModelRouter(registry, spend_tracker, mode=route_controls.mode)
+    decision = request_router.route(
+        task,
+        max_cost_usd=route_controls.max_cost_usd,
+        requested_max_tokens=route_controls.max_output_tokens,
+    )
 
     if decision is None:
         raise HTTPException(
@@ -195,9 +209,9 @@ async def chat_completions(request: Request):
         task=task,
         cost_per_1k_input=model.cost_per_1k_input,
         cost_per_1k_output=model.cost_per_1k_output,
-        mode=route_mode,
-        requested_max_tokens=max_tokens,
-        max_cost_usd=max_cost_usd,
+        mode=route_controls.mode,
+        requested_max_tokens=route_controls.max_output_tokens,
+        max_cost_usd=route_controls.max_cost_usd,
     )
     max_tokens = token_budget.max_output_tokens
 
@@ -269,7 +283,8 @@ async def chat_completions(request: Request):
             "route_hints": task.route_hints,
         },
         "routing": {
-            "mode": route_mode,
+            "mode": route_controls.mode,
+            "policy_source": route_controls.source,
             "selected_model": model.name,
             "provider": model.provider,
             "reason": decision.reason,
@@ -291,7 +306,7 @@ async def chat_completions(request: Request):
             "saved_tokens": token_budget.saved_tokens,
             "savings_pct": round(token_budget.savings_pct, 1),
             "reason": token_budget.reason,
-            "request_max_cost_usd": max_cost_usd,
+            "request_max_cost_usd": route_controls.max_cost_usd,
         },
         "usage": {
             "input_tokens": chat_response.input_tokens,
@@ -368,6 +383,11 @@ def _attempt_models(decision: RoutingDecision, model_registry: ModelLookup) -> l
 
 def _mode_from_request(requested_model: str, explicit_mode: Optional[str]) -> str:
     """Support OpenAI-compatible model names like auto:cheap / auto:quality."""
+    return _mode_from_request_optional(requested_model, explicit_mode) or "balanced"
+
+
+def _mode_from_request_optional(requested_model: str, explicit_mode: Optional[str]) -> Optional[str]:
+    """Return an explicit mode if the request provided one, otherwise None."""
     allowed = {"balanced", "cheap", "quality", "private", "speed"}
     if explicit_mode in allowed:
         return explicit_mode
@@ -375,7 +395,7 @@ def _mode_from_request(requested_model: str, explicit_mode: Optional[str]) -> st
         _, _, mode = requested_model.partition(":")
         if mode in allowed:
             return mode
-    return "balanced"
+    return None
 
 
 def _apply_byok_metadata(task: TaskProfile, metadata: dict[str, Any]) -> TaskProfile:
@@ -421,6 +441,27 @@ def _apply_byok_metadata(task: TaskProfile, metadata: dict[str, Any]) -> TaskPro
     )
 
 
+def _apply_policy_task(task: TaskProfile, policy: RoutingPolicy, explicit_task: bool = False) -> TaskProfile:
+    """Use role policy task defaults unless the request already specified one."""
+    if explicit_task:
+        return task
+
+    policy_task = policy.task_for_agent(task.agent_role)
+    if not policy_task or policy_task not in TASK_SIGNALS:
+        return task
+
+    return replace(task, task_type=policy_task)
+
+
+def _has_explicit_task_hint(metadata: dict[str, Any], task: TaskProfile) -> bool:
+    return bool(
+        metadata.get("task")
+        or metadata.get("task_type")
+        or task.route_hints.get("task")
+        or task.route_hints.get("task_type")
+    )
+
+
 def _truthy(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -434,6 +475,16 @@ def _optional_float(value: Any) -> Optional[float]:
         return None
     try:
         parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _optional_int(value: Any) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = int(value)
     except (TypeError, ValueError):
         return None
     return parsed if parsed >= 0 else None

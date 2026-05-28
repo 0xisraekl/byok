@@ -40,6 +40,16 @@ def test_route_command_accepts_request_cost_and_output_limits():
     assert "Token budget" in result.output
 
 
+def test_route_command_applies_agent_policy_defaults():
+    result = CliRunner().invoke(cli, ["route", "Handle this next step", "--agent", "coder"])
+
+    assert result.exit_code == 0
+    assert "Agent role" in result.output
+    assert "coder" in result.output
+    assert "coding" in result.output
+    assert "$0.00400" in result.output
+
+
 def test_specialties_command_shows_best_models_by_task():
     result = CliRunner().invoke(cli, ["specialties"])
 
