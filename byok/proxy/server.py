@@ -21,13 +21,15 @@ from __future__ import annotations
 
 import time
 import uuid
+import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from byok.core.classifier import TaskClassifier
+from byok.core.classifier import TASK_SIGNALS, TaskClassifier, TaskProfile
 from byok.core.registry import ModelConfig, ModelRegistry
 from byok.core.router import ModelRouter, RoutingDecision
 from byok.core.token_budget import TokenBudgeter
@@ -151,15 +153,23 @@ async def chat_completions(request: Request):
     messages: list[dict] = body.get("messages", [])
     tools: list = body.get("tools", [])
     temperature: float = body.get("temperature", 0.7)
-    max_tokens: Optional[int] = body.get("max_tokens")
+    byok_meta: dict[str, Any] = body.get("byok") if isinstance(body.get("byok"), dict) else {}
+    max_tokens: Optional[int] = (
+        body.get("max_tokens")
+        or body.get("max_completion_tokens")
+        or byok_meta.get("max_output_tokens")
+        or byok_meta.get("max_tokens")
+    )
     requested_model: str = body.get("model", "auto")
-    route_mode = _mode_from_request(requested_model, body.get("byok_mode"))
+    route_mode = _mode_from_request(requested_model, body.get("byok_mode") or byok_meta.get("mode"))
 
     if not messages:
         raise HTTPException(status_code=400, detail="messages field is required")
 
     # ── Classify the task ─────────────────────────────────────────────────
     task = classifier.classify(messages, tools)
+    task = _apply_byok_metadata(task, byok_meta)
+    provider_messages = _strip_byok_hints_from_messages(messages)
     token_budget = token_budgeter.budget_for(task, route_mode, max_tokens)
     max_tokens = token_budget.max_output_tokens
 
@@ -195,7 +205,7 @@ async def chat_completions(request: Request):
             provider = _get_provider(attempt_model)
             chat_response = await provider.chat_completion(
                 model_id=attempt_model.model_id,
-                messages=messages,
+                messages=provider_messages,
                 tools=tools if tools else None,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -243,6 +253,8 @@ async def chat_completions(request: Request):
             "has_tools": task.has_tools,
             "privacy_required": task.privacy_required,
             "confidence": round(task.confidence, 2),
+            "agent_role": task.agent_role,
+            "route_hints": task.route_hints,
         },
         "routing": {
             "mode": route_mode,
@@ -353,6 +365,84 @@ def _mode_from_request(requested_model: str, explicit_mode: Optional[str]) -> st
     return "balanced"
 
 
+def _apply_byok_metadata(task: TaskProfile, metadata: dict[str, Any]) -> TaskProfile:
+    """
+    Apply explicit request metadata after prompt-based classification.
+
+    This is how Hermes/OpenClaw users can route sub-agent calls without
+    modifying BYOK internals:
+
+        {
+          "model": "auto",
+          "messages": [...],
+          "byok": {"task": "coding", "agent": "coder", "privacy": true}
+        }
+    """
+    if not metadata:
+        return task
+
+    task_type = metadata.get("task") or metadata.get("task_type")
+    if task_type not in TASK_SIGNALS:
+        task_type = task.task_type
+
+    difficulty = metadata.get("difficulty", task.difficulty)
+    if difficulty not in {"easy", "medium", "hard"}:
+        difficulty = task.difficulty
+
+    privacy_value = metadata.get("privacy", metadata.get("private", metadata.get("local_only", False)))
+    privacy_required = task.privacy_required or _truthy(privacy_value)
+
+    role = metadata.get("agent") or metadata.get("agent_role") or task.agent_role
+    route_hints = dict(task.route_hints)
+    for key in ("task", "task_type", "agent", "agent_role", "mode", "privacy", "private", "local_only"):
+        if key in metadata:
+            route_hints[key] = str(metadata[key]).lower()
+
+    return replace(
+        task,
+        task_type=task_type,
+        difficulty=difficulty,
+        privacy_required=privacy_required,
+        agent_role=role,
+        route_hints=route_hints,
+    )
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "local"}
+
+
+def _strip_byok_hints_from_messages(messages: list[dict]) -> list[dict]:
+    """Remove inline [byok:*] routing hints before sending prompts to providers."""
+    cleaned: list[dict] = []
+    for message in messages:
+        copied = dict(message)
+        content = copied.get("content")
+        if isinstance(content, str):
+            copied["content"] = _strip_byok_hints(content)
+        elif isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, dict):
+                    part_copy = dict(part)
+                    if part_copy.get("type") == "text" and isinstance(part_copy.get("text"), str):
+                        part_copy["text"] = _strip_byok_hints(part_copy["text"])
+                    parts.append(part_copy)
+                else:
+                    parts.append(part)
+            copied["content"] = parts
+        cleaned.append(copied)
+    return cleaned
+
+
+def _strip_byok_hints(text: str) -> str:
+    return re.sub(r"\s*\[byok:[^\]]+\]\s*", " ", text, flags=re.IGNORECASE).strip()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Provider factory — creates the right provider object for each model
 # ─────────────────────────────────────────────────────────────────────────────
@@ -386,4 +476,3 @@ def _get_provider(model: ModelConfig):
         f"Unknown provider '{model.provider}' for model '{model.name}'. "
         "Supported: openai, anthropic, ollama, openai_compatible"
     )
-

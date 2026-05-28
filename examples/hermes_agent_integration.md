@@ -98,3 +98,61 @@ byok route "Analyze this confidential contract" --private
 # Simulate a task with tool calling
 byok route "Search the web for the latest AI news" --tools
 ```
+
+---
+
+## Multi-agent / sub-agent routing
+
+For Hermes workflows with sub-agents, give each sub-agent a clear role in its system prompt. BYOK reads the system prompt and uses it as a routing signal.
+
+```python
+coding_agent_system_prompt = """
+You are a coding agent and senior software engineer.
+Implement, debug, refactor, and review code.
+"""
+
+research_agent_system_prompt = """
+You are a research agent and analyst.
+Compare options, reason through tradeoffs, and surface uncertainty.
+"""
+
+writer_agent_system_prompt = """
+You are a writer sub-agent.
+Rewrite, polish, and produce the final user-facing response.
+"""
+```
+
+With those prompts:
+
+```text
+coding agent   → coding-specialist model
+research agent → reasoning / analysis model
+writer agent   → writing-specialist model
+tool agent     → tool-capable model
+private task   → local model only
+```
+
+If your Hermes setup can attach extra request metadata, BYOK also accepts explicit routing metadata:
+
+```json
+{
+  "model": "auto",
+  "messages": [
+    {"role": "user", "content": "Handle this next implementation step."}
+  ],
+  "byok": {
+    "task": "coding",
+    "agent": "coder",
+    "mode": "quality",
+    "max_output_tokens": 1200
+  }
+}
+```
+
+If Hermes only lets you control prompt text, add a compact hint:
+
+```text
+[byok:task=coding,agent=coder,mode=quality] Handle this next implementation step.
+```
+
+This is optional. BYOK still classifies normal prompts automatically, but hints make short sub-agent tasks much more reliable.

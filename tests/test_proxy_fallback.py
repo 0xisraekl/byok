@@ -2,7 +2,13 @@
 
 from byok.core.registry import ModelConfig
 from byok.core.router import RoutingDecision
-from byok.proxy.server import _attempt_models
+from byok.core.classifier import TaskProfile
+from byok.proxy.server import (
+    _apply_byok_metadata,
+    _attempt_models,
+    _mode_from_request,
+    _strip_byok_hints_from_messages,
+)
 
 
 def make_model(name: str) -> ModelConfig:
@@ -52,3 +58,49 @@ def test_attempt_models_skips_duplicate_and_missing_alternatives():
     attempts = _attempt_models(decision, FakeRegistry([selected, backup]))
 
     assert [m.name for m in attempts] == ["selected", "backup"]
+
+
+def test_mode_from_request_reads_explicit_byok_mode():
+    assert _mode_from_request("auto", "quality") == "quality"
+
+
+def test_apply_byok_metadata_overrides_task_agent_and_privacy():
+    task = TaskProfile(
+        task_type="simple_chat",
+        secondary_types=[],
+        difficulty="easy",
+        context_tokens=20,
+        has_tools=False,
+        privacy_required=False,
+        confidence=0.8,
+    )
+
+    updated = _apply_byok_metadata(
+        task,
+        {"task": "coding", "difficulty": "hard", "agent": "coder", "privacy": True},
+    )
+
+    assert updated.task_type == "coding"
+    assert updated.difficulty == "hard"
+    assert updated.agent_role == "coder"
+    assert updated.privacy_required is True
+    assert updated.route_hints["task"] == "coding"
+
+
+def test_strip_byok_hints_before_provider_forwarding():
+    messages = [
+        {"role": "user", "content": "[byok:task=coding,agent=coder] Handle this."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Please solve. [byok:privacy=true]"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+            ],
+        },
+    ]
+
+    cleaned = _strip_byok_hints_from_messages(messages)
+
+    assert cleaned[0]["content"] == "Handle this."
+    assert cleaned[1]["content"][0]["text"] == "Please solve."
+    assert cleaned[1]["content"][1] == messages[1]["content"][1]

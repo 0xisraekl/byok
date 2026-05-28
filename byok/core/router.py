@@ -150,12 +150,19 @@ class ModelRouter:
 
     def _score(self, model: ModelConfig, task: TaskProfile) -> tuple[float, str]:
         reasons: list[str] = []
+        cost = self._estimate_cost(model, task)
 
         # Hard filters
         if model.spend_limit_monthly_usd > 0:
             monthly_spend = self.spend_tracker.get_monthly_spend(model.name)
             if monthly_spend >= model.spend_limit_monthly_usd:
                 return float("-inf"), "at monthly spend limit"
+            if monthly_spend + cost > model.spend_limit_monthly_usd:
+                return (
+                    float("-inf"),
+                    f"estimated call would exceed monthly spend limit "
+                    f"(${monthly_spend:.4f} + ${cost:.4f} > ${model.spend_limit_monthly_usd:.2f})",
+                )
 
         if task.has_tools and not model.supports_tools:
             return float("-inf"), "doesn't support tool calling"
@@ -167,7 +174,6 @@ class ModelRouter:
             return float("-inf"), "privacy required, model is not local"
 
         quality = self._quality_for(model, task)
-        cost = self._estimate_cost(model, task)
         score = 0.0
 
         # Capability / task-fit score

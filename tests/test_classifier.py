@@ -100,6 +100,40 @@ class TestToolDetection:
         profile = clf.classify(msg("Search for the latest news about AI"), tools=tools)
         assert profile.has_tools is True
 
+
+class TestSubAgentClassification:
+
+    def test_coding_agent_system_prompt_routes_short_task_to_coding(self):
+        clf = TaskClassifier()
+        profile = clf.classify([
+            {"role": "system", "content": "You are a coding agent and senior software engineer."},
+            {"role": "user", "content": "Handle this next step."},
+        ])
+
+        assert profile.task_type == "coding"
+        assert profile.agent_role == "coding_agent"
+
+    def test_writer_subagent_routes_short_task_to_writing(self):
+        clf = TaskClassifier()
+        profile = clf.classify([
+            {"role": "system", "content": "You are a writer specialist sub-agent."},
+            {"role": "user", "content": "Improve this response."},
+        ])
+
+        assert profile.task_type == "writing"
+        assert profile.agent_role == "writing_agent"
+
+    def test_inline_byok_task_hint_overrides_ambiguous_prompt(self):
+        clf = TaskClassifier()
+        profile = clf.classify([
+            {"role": "user", "content": "[byok:task=math,agent=solver,privacy=true] Handle this."},
+        ])
+
+        assert profile.task_type == "math"
+        assert profile.agent_role == "solver"
+        assert profile.privacy_required is True
+        assert profile.route_hints["task"] == "math"
+
     def test_no_tools_when_not_provided(self, clf):
         profile = clf.classify(msg("Write me a poem"))
         assert profile.has_tools is False

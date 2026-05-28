@@ -106,6 +106,20 @@ TASK_SIGNALS: dict[str, list[tuple[str, float]]] = {
     ],
 }
 
+# System prompts from agent frameworks often describe a sub-agent persona
+# more clearly than the user prompt does. These hints let BYOK route a
+# "software engineer agent" differently from a "research agent" even when
+# both receive short task messages.
+AGENT_ROLE_SIGNALS: list[tuple[str, str, str, float]] = [
+    (r"\b(code|coding|coder|developer|software\s+engineer|programmer|debugger)\s+(agent|assistant|specialist|expert|sub-?agent)\b", "coding", "coding_agent", 4.0),
+    (r"\b(research|researcher|analyst|analysis)\s+(agent|assistant|specialist|expert|sub-?agent)\b", "reasoning", "research_agent", 3.5),
+    (r"\b(data\s+analyst|analytics|spreadsheet|metrics)\s+(agent|assistant|specialist|expert|sub-?agent)\b", "data_analysis", "data_agent", 4.0),
+    (r"\b(writer|editor|copywriter|content)\s+(agent|assistant|specialist|expert|sub-?agent)\b", "writing", "writing_agent", 4.0),
+    (r"\b(summarizer|summary)\s+(agent|assistant|specialist|expert|sub-?agent)\b", "summarization", "summarization_agent", 4.0),
+    (r"\b(math|calculation|solver)\s+(agent|assistant|specialist|expert|sub-?agent)\b", "math", "math_agent", 4.0),
+    (r"\b(tool|function|browser|search)\s+(agent|assistant|specialist|expert|sub-?agent)\b", "tool_calling", "tool_agent", 4.0),
+]
+
 # Keywords that signal the task requires a local/private model
 PRIVACY_SIGNALS = [
     r"\b(private|confidential|secret|sensitive|internal|proprietary|personal\s+data)\b",
@@ -136,6 +150,8 @@ class TaskProfile:
     has_tools: bool             # tools[] was present in the request
     privacy_required: bool      # must use a local model
     confidence: float           # 0.0–1.0 (how sure we are about task_type)
+    agent_role: Optional[str] = None       # detected/requested sub-agent role
+    route_hints: dict[str, str] = field(default_factory=dict)  # [byok:*] hints
 
     def __str__(self) -> str:
         tools_note = " [tools]" if self.has_tools else ""
@@ -180,12 +196,20 @@ class TaskClassifier:
         """
         # Combine all message content into one string for pattern matching
         full_text = self._extract_text(messages)
+        route_hints = self._extract_route_hints(full_text)
         context_tokens = len(full_text) // self.CHARS_PER_TOKEN
 
         # Score each task type
         scores: dict[str, float] = {}
         for task_type, patterns in TASK_SIGNALS.items():
             scores[task_type] = self._score_task_type(full_text, patterns)
+
+        agent_role = route_hints.get("agent") or route_hints.get("role")
+        detected_role, agent_task_type, agent_boost = self._detect_agent_role(full_text)
+        if not agent_role:
+            agent_role = detected_role
+        if agent_task_type:
+            scores[agent_task_type] = scores.get(agent_task_type, 0.0) + agent_boost
 
         # If tools are present, boost tool_calling score significantly
         if tools:
@@ -205,6 +229,11 @@ class TaskClassifier:
             best_type = "simple_chat"
             best_score = 1.0
 
+        hinted_task = route_hints.get("task") or route_hints.get("task_type")
+        if hinted_task in TASK_SIGNALS:
+            best_type = hinted_task
+            best_score = max(best_score, scores.get(hinted_task, 0.0), 5.0)
+
         # Confidence: how much did the winner beat the runner-up?
         # Secondary signals are useful, but they should not make a clear compound
         # task look uncertain (e.g. "write a Python function to parse JSON" is
@@ -223,8 +252,10 @@ class TaskClassifier:
             difficulty=self._estimate_difficulty(full_text, context_tokens),
             context_tokens=context_tokens,
             has_tools=bool(tools),
-            privacy_required=self._check_privacy(full_text),
+            privacy_required=self._check_privacy(full_text) or self._privacy_hint_enabled(route_hints),
             confidence=confidence,
+            agent_role=agent_role,
+            route_hints=route_hints,
         )
 
     # ── Private helpers ───────────────────────────────────────────────────────
@@ -252,6 +283,37 @@ class TaskClassifier:
             if re.search(pattern, text, re.IGNORECASE | re.MULTILINE):
                 score += weight
         return score
+
+    def _detect_agent_role(self, text: str) -> tuple[Optional[str], Optional[str], float]:
+        """Infer a sub-agent role from framework/system prompts."""
+        for pattern, task_type, role, boost in AGENT_ROLE_SIGNALS:
+            if re.search(pattern, text, re.IGNORECASE):
+                return role, task_type, boost
+        return None, None, 0.0
+
+    def _extract_route_hints(self, text: str) -> dict[str, str]:
+        """
+        Parse lightweight hints such as:
+            [byok:task=coding,mode=quality,agent=coder,privacy=true]
+
+        This keeps BYOK useful with frameworks that can only pass prompt text,
+        while remaining optional and transparent.
+        """
+        hints: dict[str, str] = {}
+        for match in re.finditer(r"\[byok:([^\]]+)\]", text, re.IGNORECASE):
+            for part in match.group(1).split(","):
+                if "=" not in part:
+                    continue
+                key, value = part.split("=", 1)
+                key = key.strip().lower().replace("-", "_")
+                value = value.strip().lower()
+                if key:
+                    hints[key] = value
+        return hints
+
+    def _privacy_hint_enabled(self, hints: dict[str, str]) -> bool:
+        value = hints.get("privacy") or hints.get("private") or hints.get("local_only")
+        return value in {"1", "true", "yes", "on", "local"}
 
     def _estimate_difficulty(self, text: str, context_tokens: int) -> str:
         """

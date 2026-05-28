@@ -129,6 +129,37 @@ class TestSpendLimits:
         assert decision is not None
         assert decision.selected_model.name == "cheap"
 
+    def test_model_skipped_when_estimated_call_would_exceed_limit(self, spend_tracker):
+        """A model should be skipped before a call that would push it over budget."""
+        nearly_capped = make_model(
+            name="nearly-capped",
+            strengths=["coding"],
+            spend_limit_monthly_usd=1.0,
+            cost_per_1k_input=0.1,
+            cost_per_1k_output=0.2,
+        )
+        fallback = make_model(
+            name="fallback",
+            strengths=["coding"],
+            spend_limit_monthly_usd=0.0,
+            cost_per_1k_input=0.001,
+            cost_per_1k_output=0.002,
+        )
+        registry = FakeRegistry([nearly_capped, fallback])
+        router = ModelRouter(registry, spend_tracker)
+
+        spend_tracker.log(
+            model_name="nearly-capped", provider="openai", task_type="coding",
+            difficulty="medium", input_tokens=100, output_tokens=50,
+            cost_usd=0.95,
+            routing_reason="test",
+        )
+
+        decision = router.route(make_profile(task_type="coding", context_tokens=1000))
+
+        assert decision is not None
+        assert decision.selected_model.name == "fallback"
+
     def test_model_under_limit_is_available(self, spend_tracker):
         model = make_model(name="m1", spend_limit_monthly_usd=10.0)
         spend_tracker.log(

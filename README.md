@@ -78,12 +78,15 @@ It is not production-ready yet. I'm building it in public as I learn.
 - **OpenAI-compatible proxy** — point compatible clients at `http://localhost:8000/v1`
 - **Configurable model pool** — define available models in `config/models.yaml`
 - **Task-aware routing** — coding, reasoning, math, writing, summarization, extraction, data analysis, tool-calling, simple chat
+- **Sub-agent-aware routing** — system prompts like "coding agent", "research agent", or "writer sub-agent" bias routing toward the right model for that agent's role
+- **Optional routing hints** — pass `[byok:task=coding,agent=coder,privacy=true]` in prompt text or a `byok` metadata object in proxy requests
 - **Quality-aware model selection** — per-model and per-task quality priors so Claude can win writing/coding, GPT can win structured/tool tasks, Gemini/OpenRouter can win long cheap summaries, etc.
 - **Cheapest good-enough mode** — avoid wasting premium models on extraction, classification, summaries, and easy chat
 - **Savings visibility** — every routing decision can show estimated cost, best-quality reference model, and estimated savings
 - **Token budgets** — cap output tokens by task/difficulty/mode so cheap/balanced requests do not ramble and burn money
 - **Model specialties view** — inspect which configured model is best quality vs best value for coding, writing, extraction, etc.
 - **Spend limits** — set a monthly USD cap per model
+- **Projected spend guardrails** — BYOK skips a model if the estimated next call would push it over its configured monthly cap
 - **Privacy mode** — force sensitive/private requests to local models only
 - **Local routing log** — record decisions, estimated cost, and chosen model in SQLite
 - **Provider flexibility** — OpenAI, Anthropic, Ollama/local models, and OpenAI-compatible APIs
@@ -198,6 +201,51 @@ byok spend
 8. **Log** the decision locally for debugging and spend tracking.
 
 See [`docs/architecture.md`](docs/architecture.md) for a deeper walkthrough.
+
+---
+
+## Sub-agent routing
+
+BYOK works best with Hermes/OpenClaw-style multi-agent setups when each sub-agent has a clear system prompt:
+
+```text
+You are a coding agent and senior software engineer.
+```
+
+```text
+You are a research agent. Analyze tradeoffs and cite uncertainty.
+```
+
+```text
+You are a writer sub-agent. Polish the final response.
+```
+
+Those prompts are enough for BYOK to bias routing toward coding, reasoning/research, or writing models even when the user task is short, like "handle the next step".
+
+For frameworks that can pass custom request fields, use explicit metadata:
+
+```json
+{
+  "model": "auto",
+  "messages": [
+    {"role": "user", "content": "Handle this next step."}
+  ],
+  "byok": {
+    "task": "coding",
+    "agent": "coder",
+    "mode": "quality",
+    "max_output_tokens": 1200
+  }
+}
+```
+
+For frameworks that can only pass prompt text, add a lightweight hint:
+
+```text
+[byok:task=coding,agent=coder,mode=quality] Handle this next step.
+```
+
+Supported task hints are: `coding`, `reasoning`, `math`, `writing`, `summarization`, `extraction`, `data_analysis`, `tool_calling`, and `simple_chat`.
 
 ---
 
