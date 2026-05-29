@@ -241,6 +241,13 @@ Every decision should be explainable. If BYOK chooses a model, the user should b
 
 The user should be able to edit `config/models.yaml` and understand what changed.
 
+### Evaluable behavior
+
+Routing quality should be testable without paying for API calls. `byok eval`
+uses `config/eval_scenarios.yaml` to simulate representative Hermes/OpenClaw
+tasks and verify model capabilities, privacy constraints, tool support, cost
+ceilings, and token caps.
+
 ### Beginner-friendly
 
 The project should stay readable enough for a beginner to learn from it while still being useful.

@@ -97,7 +97,14 @@ byok route "Analyze this confidential contract" --private
 
 # Simulate a task with tool calling
 byok route "Search the web for the latest AI news" --tools
+
+# Run the offline routing evaluation suite
+byok eval
 ```
+
+`byok eval` does not call providers. It checks representative Hermes/OpenClaw
+scenarios in `config/eval_scenarios.yaml`, including sub-agent role routing,
+tool support, privacy/local routing, and budget ceilings.
 
 ---
 

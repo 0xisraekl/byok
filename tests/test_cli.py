@@ -79,3 +79,11 @@ def test_specialties_command_shows_best_models_by_task():
     assert "Best models by task" in result.output
     assert "coding" in result.output
     assert "Best quality" in result.output
+
+
+def test_eval_command_runs_default_scenarios():
+    result = CliRunner().invoke(cli, ["eval"])
+
+    assert result.exit_code == 0
+    assert "Routing Evaluation" in result.output
+    assert "Result:" in result.output

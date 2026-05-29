@@ -26,6 +26,8 @@ load_dotenv()
 console = Console()
 
 CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "models.yaml"
+POLICY_PATH = Path(__file__).parent.parent.parent / "config" / "routing_policy.yaml"
+EVAL_PATH = Path(__file__).parent.parent.parent / "config" / "eval_scenarios.yaml"
 DB_PATH = Path("byok.db")
 
 
@@ -140,7 +142,7 @@ def route(
         message = click.prompt("Enter a task message")
 
     reg = ModelRegistry(CONFIG_PATH)
-    policy = RoutingPolicy(Path(__file__).parent.parent.parent / "config" / "routing_policy.yaml")
+    policy = RoutingPolicy(POLICY_PATH)
     tracker = SpendTracker(DB_PATH)
     clf = TaskClassifier()
 
@@ -274,6 +276,58 @@ def _combine_cost_limits(*limits: float | None) -> float | None:
     if not active:
         return None
     return min(active)
+
+
+# ── byok eval ─────────────────────────────────────────────────────────────────
+
+@cli.command(name="eval")
+@click.option("--scenarios", type=click.Path(exists=True, dir_okay=False), default=str(EVAL_PATH), show_default=True)
+@click.option("--available-only", is_flag=True, help="Evaluate only models with currently available keys/local access")
+def eval_command(scenarios: str, available_only: bool):
+    """Run offline routing evaluation scenarios without making API calls."""
+    from byok.core.evaluator import ConfiguredModelRegistry, RoutingEvaluator, load_scenarios
+    from byok.core.policy import RoutingPolicy
+    from byok.core.registry import ModelRegistry
+    from byok.storage.spend_tracker import SpendTracker
+
+    scenario_list = load_scenarios(scenarios)
+    registry = ModelRegistry(CONFIG_PATH)
+    evaluator = RoutingEvaluator(
+        registry=registry if available_only else ConfiguredModelRegistry(registry),
+        policy=RoutingPolicy(POLICY_PATH),
+        spend_tracker=SpendTracker(DB_PATH),
+    )
+    summary = evaluator.run(scenario_list)
+
+    table = Table(title="Routing Evaluation", box=box.ROUNDED, show_lines=True)
+    table.add_column("Status", width=8)
+    table.add_column("Scenario", style="bold")
+    table.add_column("Task")
+    table.add_column("Mode")
+    table.add_column("Model")
+    table.add_column("Cost")
+    table.add_column("Tokens")
+    table.add_column("Notes")
+
+    for result in summary.results:
+        table.add_row(
+            "[green]PASS[/green]" if result.passed else "[red]FAIL[/red]",
+            result.scenario.name,
+            result.task_type or "—",
+            result.mode or "—",
+            result.selected_model or "—",
+            f"${result.estimated_cost_usd:.5f}" if result.estimated_cost_usd is not None else "—",
+            str(result.max_output_tokens) if result.max_output_tokens is not None else "—",
+            "; ".join(result.errors) if result.errors else result.reason,
+        )
+
+    console.print(table)
+    console.print(
+        f"[bold]Result:[/bold] {summary.passed_count}/{len(summary.results)} passed"
+    )
+
+    if not summary.passed:
+        raise SystemExit(1)
 
 
 # ── byok doctor ───────────────────────────────────────────────────────────────

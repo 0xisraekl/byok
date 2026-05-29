@@ -1,0 +1,49 @@
+# BYOK routing evaluation scenarios.
+#
+# These are no-API-cost checks. They verify that classification, sub-agent
+# policy, model selection, token caps, privacy, and budget rules behave as
+# expected for representative Hermes/OpenClaw tasks.
+
+scenarios:
+  - name: coder_subagent_small_budget
+    message: "Implement the next parser helper and add a focused unit test."
+    agent: coder
+    expected_task: coding
+    expected_strength: coding
+    max_cost_usd: 0.004
+
+  - name: research_subagent_quality
+    message: "Compare the tradeoffs between queue-based workers and direct async calls."
+    agent: researcher
+    expected_task: reasoning
+    expected_strength: reasoning
+    max_cost_usd: 0.010
+
+  - name: tool_agent_requires_tools
+    message: "Search the web for current provider status and summarize the result."
+    agent: tool
+    tools: true
+    expected_task: tool_calling
+    expected_strength: tool_calling
+    requires_tools: true
+    max_cost_usd: 0.003
+
+  - name: writer_subagent_goes_cheap
+    message: "Polish this final answer for clarity and tone."
+    agent: writer
+    expected_task: writing
+    expected_strength: writing
+    max_cost_usd: 0.002
+
+  - name: private_contract_stays_local
+    message: "Analyze this confidential customer contract and keep it local."
+    expected_task: reasoning
+    privacy: true
+    requires_local: true
+    max_cost_usd: 0.001
+
+  - name: long_summary_uses_summary_model
+    message: "Summarize this long product requirements document into decisions and action items."
+    expected_task: summarization
+    expected_strength: summarization
+    max_cost_usd: 0.002

@@ -88,6 +88,7 @@ It is not production-ready yet. I'm building it in public as I learn.
 - **Request cost ceilings** — set a per-call budget like `$0.002`; BYOK routes to models that fit and reduces output tokens when needed
 - **Run/session budgets** — set one budget across a whole Hermes/OpenClaw task run so sub-agent calls share a ceiling
 - **Budget-safe fallbacks** — if a provider fails, BYOK retries ranked alternatives with a fresh token cap for that fallback model's own pricing
+- **Offline routing evals** — run `byok eval` to verify representative Hermes/OpenClaw routing scenarios without making API calls
 - **Model specialties view** — inspect which configured model is best quality vs best value for coding, writing, extraction, etc.
 - **Spend limits** — set a monthly USD cap per model
 - **Projected spend guardrails** — BYOK skips a model if the estimated next call would push it over its configured monthly cap
@@ -182,6 +183,10 @@ byok models
 # See which model is best quality vs best value for each task
 byok specialties
 
+# Run offline routing quality checks
+byok eval
+byok eval --available-only
+
 # Show recent routing decisions
 byok log
 
@@ -208,6 +213,26 @@ byok spend
 8. **Log** the decision locally for debugging and spend tracking.
 
 See [`docs/architecture.md`](docs/architecture.md) for a deeper walkthrough.
+
+---
+
+## Routing Evaluation
+
+BYOK includes a no-API-cost evaluator:
+
+```bash
+byok eval
+```
+
+It loads `config/eval_scenarios.yaml`, simulates representative agent tasks, and checks that routing decisions satisfy expectations such as:
+
+- coding sub-agent tasks select a coding-capable model
+- tool-agent tasks select a tool-capable model
+- private tasks stay local
+- estimated cost stays under the scenario budget
+- output token caps remain usable
+
+By default, `byok eval` evaluates all enabled models in `config/models.yaml` even if API keys are not present. This makes it useful for contributors and GitHub reviewers. Use `byok eval --available-only` when you want the check restricted to models that are actually usable on your machine right now.
 
 ---
 
