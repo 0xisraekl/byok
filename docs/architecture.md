@@ -207,8 +207,15 @@ Useful fields:
 - estimated output tokens
 - estimated cost
 - routing reason
+- optional run/session id
 
 Early versions may use estimated token counts. Later versions should use actual provider usage fields when available.
+
+For multi-agent workflows, BYOK can enforce a run-level budget. The proxy stores
+`run_id` on every logged request, computes spend already used by that run, and
+passes the remaining `max_run_cost_usd` to the router as the effective cost
+ceiling. This lets planner, coder, tool, and writer sub-agents share one budget
+without the agent framework needing native BYOK integration.
 
 ---
 

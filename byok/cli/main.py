@@ -104,6 +104,8 @@ def serve(port: int, host: str, reload: bool):
 )
 @click.option("--agent", help="Simulate a sub-agent role, e.g. coder, research_agent, writer")
 @click.option("--max-cost", type=float, help="Maximum estimated USD cost allowed for this routed call")
+@click.option("--run-id", help="Agent run/session id for shared run budget checks")
+@click.option("--max-run-cost", type=float, help="Maximum estimated USD spend allowed across this run/session")
 @click.option("--max-output-tokens", type=int, help="Maximum output tokens allowed for this routed call")
 def route(
     message: str,
@@ -113,6 +115,8 @@ def route(
     mode: str | None,
     agent: str | None,
     max_cost: float | None,
+    run_id: str | None,
+    max_run_cost: float | None,
     max_output_tokens: int | None,
 ):
     """
@@ -163,11 +167,14 @@ def route(
         explicit_max_cost_usd=max_cost,
         explicit_max_output_tokens=max_output_tokens,
     )
+    run_spent = tracker.get_run_spend(run_id) if run_id else 0.0
+    run_remaining = _remaining_run_budget(run_spent, max_run_cost)
+    effective_max_cost = _combine_cost_limits(controls.max_cost_usd, run_remaining)
     rtr = ModelRouter(reg, tracker, mode=controls.mode)
 
     decision = rtr.route(
         task_profile,
-        max_cost_usd=controls.max_cost_usd,
+        max_cost_usd=effective_max_cost,
         requested_max_tokens=controls.max_output_tokens,
     )
     if decision is not None:
@@ -177,7 +184,7 @@ def route(
             cost_per_1k_output=decision.selected_model.cost_per_1k_output,
             mode=controls.mode,
             requested_max_tokens=controls.max_output_tokens,
-            max_cost_usd=controls.max_cost_usd,
+            max_cost_usd=effective_max_cost,
         )
     else:
         token_budget = TokenBudgeter().budget_for(task_profile, controls.mode, controls.max_output_tokens)
@@ -199,6 +206,13 @@ def route(
         t.add_row("Agent role", task_profile.agent_role)
     if controls.max_cost_usd is not None:
         t.add_row("Max cost", f"${controls.max_cost_usd:.5f}")
+    if run_id:
+        t.add_row("Run ID", run_id)
+        t.add_row("Run spent", f"${run_spent:.5f}")
+    if max_run_cost is not None:
+        t.add_row("Max run cost", f"${max_run_cost:.5f}")
+    if effective_max_cost is not None:
+        t.add_row("Effective max cost", f"${effective_max_cost:.5f}")
     t.add_row("Task type", f"[cyan]{task_profile.task_type}[/cyan]")
     t.add_row("Difficulty", task_profile.difficulty)
     t.add_row("Context tokens", str(task_profile.context_tokens))
@@ -247,6 +261,19 @@ def route(
 
     console.print(Panel(r, title="✓ Routing Decision", border_style="green"))
     console.print()
+
+
+def _remaining_run_budget(run_spent_usd: float, max_run_cost_usd: float | None) -> float | None:
+    if max_run_cost_usd is None:
+        return None
+    return max(max_run_cost_usd - run_spent_usd, 0.0)
+
+
+def _combine_cost_limits(*limits: float | None) -> float | None:
+    active = [limit for limit in limits if limit is not None]
+    if not active:
+        return None
+    return min(active)
 
 
 # ── byok doctor ───────────────────────────────────────────────────────────────

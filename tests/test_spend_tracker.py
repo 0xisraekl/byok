@@ -4,6 +4,7 @@ Run with:  .venv/bin/pytest tests/ -v
 """
 
 import pytest
+import sqlite3
 from byok.storage.spend_tracker import SpendTracker
 
 
@@ -72,3 +73,53 @@ class TestSpendTracking:
         assert "b" in monthly
         assert monthly["a"] == pytest.approx(1.00)
         assert monthly["b"] == pytest.approx(2.50)
+
+    def test_run_spend_accumulates_across_models(self, tracker):
+        tracker.log("planner", "openai", "reasoning", "medium",
+                    input_tokens=100, output_tokens=50, cost_usd=0.003,
+                    run_id="run-123")
+        tracker.log("coder", "anthropic", "coding", "hard",
+                    input_tokens=200, output_tokens=100, cost_usd=0.007,
+                    run_id="run-123")
+        tracker.log("other", "openai", "writing", "easy",
+                    input_tokens=100, output_tokens=50, cost_usd=0.500,
+                    run_id="different-run")
+
+        assert tracker.get_run_spend("run-123") == pytest.approx(0.010)
+        assert tracker.get_run_requests("run-123") == 2
+
+    def test_recent_records_include_run_id(self, tracker):
+        tracker.log("planner", "openai", "reasoning", "medium",
+                    input_tokens=100, output_tokens=50, cost_usd=0.003,
+                    run_id="run-abc")
+
+        records = tracker.get_recent(1)
+
+        assert records[0].run_id == "run-abc"
+
+    def test_existing_db_without_run_id_is_migrated(self, tmp_path):
+        db_path = tmp_path / "old-byok.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("""
+            CREATE TABLE usage_log (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp       TEXT    NOT NULL,
+                model_name      TEXT    NOT NULL,
+                provider        TEXT    NOT NULL,
+                task_type       TEXT    NOT NULL,
+                difficulty      TEXT    NOT NULL DEFAULT 'unknown',
+                input_tokens    INTEGER NOT NULL DEFAULT 0,
+                output_tokens   INTEGER NOT NULL DEFAULT 0,
+                cost_usd        REAL    NOT NULL DEFAULT 0.0,
+                routing_reason  TEXT    NOT NULL DEFAULT ''
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+        tracker = SpendTracker(db_path)
+        tracker.log("coder", "openai", "coding", "easy",
+                    input_tokens=10, output_tokens=20, cost_usd=0.001,
+                    run_id="run-migrated")
+
+        assert tracker.get_run_spend("run-migrated") == pytest.approx(0.001)

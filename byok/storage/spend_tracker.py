@@ -31,6 +31,7 @@ class UsageRecord:
     output_tokens: int
     cost_usd: float
     routing_reason: str
+    run_id: Optional[str] = None
 
 
 class SpendTracker:
@@ -74,9 +75,13 @@ class SpendTracker:
                 input_tokens    INTEGER NOT NULL DEFAULT 0,
                 output_tokens   INTEGER NOT NULL DEFAULT 0,
                 cost_usd        REAL    NOT NULL DEFAULT 0.0,
-                routing_reason  TEXT    NOT NULL DEFAULT ''
+                routing_reason  TEXT    NOT NULL DEFAULT '',
+                run_id          TEXT
             )
         """)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(usage_log)").fetchall()}
+        if "run_id" not in columns:
+            conn.execute("ALTER TABLE usage_log ADD COLUMN run_id TEXT")
         conn.commit()
 
     def log(
@@ -89,6 +94,7 @@ class SpendTracker:
         output_tokens: int,
         cost_usd: float,
         routing_reason: str = "",
+        run_id: Optional[str] = None,
     ) -> None:
         """Record one API call."""
         conn = self._connect()
@@ -96,8 +102,8 @@ class SpendTracker:
             """
             INSERT INTO usage_log
                 (timestamp, model_name, provider, task_type, difficulty,
-                 input_tokens, output_tokens, cost_usd, routing_reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 input_tokens, output_tokens, cost_usd, routing_reason, run_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 datetime.now().isoformat(),
@@ -109,6 +115,7 @@ class SpendTracker:
                 output_tokens,
                 cost_usd,
                 routing_reason,
+                run_id,
             ),
         )
         conn.commit()
@@ -153,7 +160,7 @@ class SpendTracker:
         rows = conn.execute(
                 """
                 SELECT id, timestamp, model_name, provider, task_type,
-                       difficulty, input_tokens, output_tokens, cost_usd, routing_reason
+                       difficulty, input_tokens, output_tokens, cost_usd, routing_reason, run_id
                 FROM usage_log
                 ORDER BY id DESC
                 LIMIT ?
@@ -173,9 +180,36 @@ class SpendTracker:
                 output_tokens=r[7],
                 cost_usd=r[8],
                 routing_reason=r[9],
+                run_id=r[10],
             )
             for r in rows
         ]
+
+    def get_run_spend(self, run_id: str) -> float:
+        """Total spend for one agent run/session."""
+        if not run_id:
+            return 0.0
+        conn = self._connect()
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(cost_usd), 0.0)
+            FROM usage_log
+            WHERE run_id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+        return row[0] if row else 0.0
+
+    def get_run_requests(self, run_id: str) -> int:
+        """Number of routed requests associated with one agent run/session."""
+        if not run_id:
+            return 0
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT COUNT(*) FROM usage_log WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        return row[0] if row else 0
 
     def total_spent(self) -> float:
         """All-time total spend across all models."""

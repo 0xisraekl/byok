@@ -86,6 +86,7 @@ It is not production-ready yet. I'm building it in public as I learn.
 - **Savings visibility** — every routing decision can show estimated cost, best-quality reference model, and estimated savings
 - **Token budgets** — cap output tokens by task/difficulty/mode so cheap/balanced requests do not ramble and burn money
 - **Request cost ceilings** — set a per-call budget like `$0.002`; BYOK routes to models that fit and reduces output tokens when needed
+- **Run/session budgets** — set one budget across a whole Hermes/OpenClaw task run so sub-agent calls share a ceiling
 - **Model specialties view** — inspect which configured model is best quality vs best value for coding, writing, extraction, etc.
 - **Spend limits** — set a monthly USD cap per model
 - **Projected spend guardrails** — BYOK skips a model if the estimated next call would push it over its configured monthly cap
@@ -172,6 +173,7 @@ byok route "Debug this production issue" --mode quality
 byok route "Summarize this customer data" --mode private
 byok route "Run this coder sub-agent step" --max-cost 0.002 --max-output-tokens 800
 byok route "Handle this next step" --agent coder
+byok route "Handle this coder step" --agent coder --run-id task-42 --max-run-cost 0.02
 
 # Inspect configured models
 byok models
@@ -278,6 +280,24 @@ agents:
 ```
 
 If a request says it is from `coder`, `coding_agent`, or a system prompt like "You are a coding agent", BYOK applies the coding policy automatically. Request metadata still wins when you need an exception.
+
+For a shared budget across an entire agent run, pass a stable `run_id` and `max_run_cost_usd` on every sub-agent request:
+
+```json
+{
+  "model": "auto",
+  "messages": [
+    {"role": "system", "content": "You are a coding agent."},
+    {"role": "user", "content": "Implement the next function."}
+  ],
+  "byok": {
+    "run_id": "task-42",
+    "max_run_cost_usd": 0.02
+  }
+}
+```
+
+BYOK stores spend for `task-42` in SQLite. Each later sub-agent call sees the remaining run budget and uses it as the effective per-call ceiling. You can also send these as headers: `x-byok-run-id` and `x-byok-run-budget`.
 
 ---
 

@@ -8,10 +8,12 @@ from byok.proxy.server import (
     _apply_byok_metadata,
     _apply_policy_task,
     _attempt_models,
+    _combine_cost_limits,
     _has_explicit_task_hint,
     _mode_from_request,
     _mode_from_request_optional,
     _optional_float,
+    _remaining_run_budget,
     _strip_byok_hints_from_messages,
 )
 
@@ -158,3 +160,13 @@ def test_optional_float_parses_request_budget_values():
     assert _optional_float(1) == 1.0
     assert _optional_float("-1") is None
     assert _optional_float("not-a-number") is None
+
+
+def test_run_budget_helpers_compute_effective_limit():
+    assert _remaining_run_budget(0.006, 0.010) == 0.004
+    assert _remaining_run_budget(0.012, 0.010) == 0.0
+    assert _remaining_run_budget(0.006, None) is None
+
+    assert _combine_cost_limits(None, None) is None
+    assert _combine_cost_limits(0.004, None) == 0.004
+    assert _combine_cost_limits(0.004, 0.002) == 0.002

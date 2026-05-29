@@ -50,6 +50,28 @@ def test_route_command_applies_agent_policy_defaults():
     assert "$0.00400" in result.output
 
 
+def test_route_command_accepts_run_budget_controls():
+    result = CliRunner().invoke(
+        cli,
+        [
+            "route",
+            "Handle this next step",
+            "--agent",
+            "coder",
+            "--run-id",
+            "run-test",
+            "--max-run-cost",
+            "0.02",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Run ID" in result.output
+    assert "run-test" in result.output
+    assert "Max run cost" in result.output
+    assert "Effective max cost" in result.output
+
+
 def test_specialties_command_shows_best_models_by_task():
     result = CliRunner().invoke(cli, ["specialties"])
 

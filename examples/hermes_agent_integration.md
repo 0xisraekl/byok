@@ -169,6 +169,31 @@ writer agent   → {"byok": {"task": "writing", "mode": "cheap", "max_cost_usd":
 
 BYOK uses that budget during routing. If a premium model would exceed the limit, it tries a cheaper capable model. If the selected model can fit only with a shorter answer, BYOK lowers `max_tokens` before forwarding the request.
 
+For a whole Hermes task tree, pass the same run id and run budget to every sub-agent request:
+
+```json
+{
+  "model": "auto",
+  "messages": [
+    {"role": "system", "content": "You are a coding agent and senior software engineer."},
+    {"role": "user", "content": "Implement the next function."}
+  ],
+  "byok": {
+    "run_id": "hermes-task-42",
+    "max_run_cost_usd": 0.02
+  }
+}
+```
+
+BYOK tracks all calls with `run_id = "hermes-task-42"` in SQLite. If the planner, coder, tool, and writer sub-agents have already spent `$0.017`, the next call only has `$0.003` left. The router uses that remaining amount as the effective cost ceiling.
+
+If your Hermes/OpenAI-compatible client supports custom headers more easily than custom JSON fields, use:
+
+```text
+x-byok-run-id: hermes-task-42
+x-byok-run-budget: 0.02
+```
+
 You can avoid repeating those budgets by editing `config/routing_policy.yaml`:
 
 ```yaml

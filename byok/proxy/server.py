@@ -168,6 +168,18 @@ async def chat_completions(request: Request):
         or byok_meta.get("budget_usd")
         or body.get("byok_max_cost_usd")
     )
+    run_id = _optional_str(
+        byok_meta.get("run_id")
+        or byok_meta.get("session_id")
+        or body.get("byok_run_id")
+        or request.headers.get("x-byok-run-id")
+    )
+    max_run_cost_usd = _optional_float(
+        byok_meta.get("max_run_cost_usd")
+        or byok_meta.get("run_budget_usd")
+        or body.get("byok_max_run_cost_usd")
+        or request.headers.get("x-byok-run-budget")
+    )
     requested_model: str = body.get("model", "auto")
     explicit_mode = _mode_from_request_optional(requested_model, body.get("byok_mode") or byok_meta.get("mode"))
 
@@ -184,13 +196,26 @@ async def chat_completions(request: Request):
         explicit_max_cost_usd=explicit_max_cost_usd,
         explicit_max_output_tokens=_optional_int(requested_max_tokens),
     )
+    run_spent_usd = spend_tracker.get_run_spend(run_id) if run_id else 0.0
+    run_remaining_usd = _remaining_run_budget(run_spent_usd, max_run_cost_usd)
+    effective_max_cost_usd = _combine_cost_limits(route_controls.max_cost_usd, run_remaining_usd)
+    if run_remaining_usd is not None and run_remaining_usd <= 0:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "message": "BYOK run budget exhausted.",
+                "run_id": run_id,
+                "run_spent_usd": round(run_spent_usd, 6),
+                "max_run_cost_usd": max_run_cost_usd,
+            },
+        )
     provider_messages = _strip_byok_hints_from_messages(messages)
 
     # ── Route to best model ───────────────────────────────────────────────
     request_router = ModelRouter(registry, spend_tracker, mode=route_controls.mode)
     decision = request_router.route(
         task,
-        max_cost_usd=route_controls.max_cost_usd,
+        max_cost_usd=effective_max_cost_usd,
         requested_max_tokens=route_controls.max_output_tokens,
     )
 
@@ -211,7 +236,7 @@ async def chat_completions(request: Request):
         cost_per_1k_output=model.cost_per_1k_output,
         mode=route_controls.mode,
         requested_max_tokens=route_controls.max_output_tokens,
-        max_cost_usd=route_controls.max_cost_usd,
+        max_cost_usd=effective_max_cost_usd,
     )
     max_tokens = token_budget.max_output_tokens
 
@@ -268,7 +293,9 @@ async def chat_completions(request: Request):
         output_tokens=chat_response.output_tokens,
         cost_usd=cost,
         routing_reason=decision.reason,
+        run_id=run_id,
     )
+    new_run_spend_usd = run_spent_usd + cost if run_id else None
 
     # ── Store last decision for /v1/routing/last ──────────────────────────
     _last_decision = {
@@ -285,6 +312,11 @@ async def chat_completions(request: Request):
         "routing": {
             "mode": route_controls.mode,
             "policy_source": route_controls.source,
+            "run_id": run_id,
+            "run_spent_usd": round(run_spent_usd, 6) if run_id else None,
+            "run_spent_after_usd": round(new_run_spend_usd, 6) if new_run_spend_usd is not None else None,
+            "max_run_cost_usd": max_run_cost_usd,
+            "effective_max_cost_usd": effective_max_cost_usd,
             "selected_model": model.name,
             "provider": model.provider,
             "reason": decision.reason,
@@ -307,6 +339,7 @@ async def chat_completions(request: Request):
             "savings_pct": round(token_budget.savings_pct, 1),
             "reason": token_budget.reason,
             "request_max_cost_usd": route_controls.max_cost_usd,
+            "effective_max_cost_usd": effective_max_cost_usd,
         },
         "usage": {
             "input_tokens": chat_response.input_tokens,
@@ -488,6 +521,26 @@ def _optional_int(value: Any) -> Optional[int]:
     except (TypeError, ValueError):
         return None
     return parsed if parsed >= 0 else None
+
+
+def _optional_str(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _remaining_run_budget(run_spent_usd: float, max_run_cost_usd: Optional[float]) -> Optional[float]:
+    if max_run_cost_usd is None:
+        return None
+    return max(max_run_cost_usd - run_spent_usd, 0.0)
+
+
+def _combine_cost_limits(*limits: Optional[float]) -> Optional[float]:
+    active = [limit for limit in limits if limit is not None]
+    if not active:
+        return None
+    return min(active)
 
 
 def _strip_byok_hints_from_messages(messages: list[dict]) -> list[dict]:
