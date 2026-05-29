@@ -187,6 +187,8 @@ For a whole Hermes task tree, pass the same run id and run budget to every sub-a
 
 BYOK tracks all calls with `run_id = "hermes-task-42"` in SQLite. If the planner, coder, tool, and writer sub-agents have already spent `$0.017`, the next call only has `$0.003` left. The router uses that remaining amount as the effective cost ceiling.
 
+Fallbacks also respect the remaining budget. If the first-choice provider is down and BYOK tries a different backup model, it recalculates `max_tokens` using the backup model's own token price before forwarding the request.
+
 If your Hermes/OpenAI-compatible client supports custom headers more easily than custom JSON fields, use:
 
 ```text

@@ -87,6 +87,7 @@ It is not production-ready yet. I'm building it in public as I learn.
 - **Token budgets** — cap output tokens by task/difficulty/mode so cheap/balanced requests do not ramble and burn money
 - **Request cost ceilings** — set a per-call budget like `$0.002`; BYOK routes to models that fit and reduces output tokens when needed
 - **Run/session budgets** — set one budget across a whole Hermes/OpenClaw task run so sub-agent calls share a ceiling
+- **Budget-safe fallbacks** — if a provider fails, BYOK retries ranked alternatives with a fresh token cap for that fallback model's own pricing
 - **Model specialties view** — inspect which configured model is best quality vs best value for coding, writing, extraction, etc.
 - **Spend limits** — set a monthly USD cap per model
 - **Projected spend guardrails** — BYOK skips a model if the estimated next call would push it over its configured monthly cap
@@ -298,6 +299,8 @@ For a shared budget across an entire agent run, pass a stable `run_id` and `max_
 ```
 
 BYOK stores spend for `task-42` in SQLite. Each later sub-agent call sees the remaining run budget and uses it as the effective per-call ceiling. You can also send these as headers: `x-byok-run-id` and `x-byok-run-budget`.
+
+Fallbacks respect the same budget. If the first-choice model fails and BYOK tries a more expensive backup, it recomputes `max_tokens` for that backup instead of reusing the first model's token cap.
 
 ---
 

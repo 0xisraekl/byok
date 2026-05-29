@@ -191,6 +191,10 @@ Planned adapter types:
 
 Provider adapters should hide provider-specific differences from the router.
 
+Provider fallback is budget-aware. When the proxy retries a ranked alternative,
+it recomputes the output token budget using that fallback model's own pricing
+and the active request/run cost ceiling.
+
 ---
 
 ### 6. Spend tracker
@@ -250,5 +254,4 @@ The project should stay readable enough for a beginner to learn from it while st
 - benchmark suite for routing quality
 - per-project routing profiles
 - sensitive-data detector beyond keyword rules
-- automatic fallback when a provider errors or rate-limits
 - model quality scores learned from user feedback

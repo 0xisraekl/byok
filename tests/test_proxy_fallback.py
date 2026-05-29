@@ -9,12 +9,14 @@ from byok.proxy.server import (
     _apply_policy_task,
     _attempt_models,
     _combine_cost_limits,
+    _estimate_cost_for_model,
     _has_explicit_task_hint,
     _mode_from_request,
     _mode_from_request_optional,
     _optional_float,
     _remaining_run_budget,
     _strip_byok_hints_from_messages,
+    _token_budget_for_model,
 )
 
 
@@ -24,6 +26,8 @@ def make_model(name: str) -> ModelConfig:
         provider="openai",
         model_id=name,
         strengths=["general"],
+        cost_per_1k_input=0.001,
+        cost_per_1k_output=0.002,
         api_key_env=None,
     )
 
@@ -170,3 +174,37 @@ def test_run_budget_helpers_compute_effective_limit():
     assert _combine_cost_limits(None, None) is None
     assert _combine_cost_limits(0.004, None) == 0.004
     assert _combine_cost_limits(0.004, 0.002) == 0.002
+
+
+def test_fallback_token_budget_is_recomputed_for_each_model_cost():
+    task = TaskProfile(
+        task_type="coding",
+        secondary_types=[],
+        difficulty="medium",
+        context_tokens=1000,
+        has_tools=False,
+        privacy_required=False,
+        confidence=0.9,
+    )
+    cheap_primary = make_model("cheap-primary")
+    expensive_fallback = make_model("expensive-fallback")
+    expensive_fallback.cost_per_1k_output = 0.01
+
+    primary_budget = _token_budget_for_model(
+        cheap_primary,
+        task,
+        mode="quality",
+        requested_max_tokens=1400,
+        max_cost_usd=0.006,
+    )
+    fallback_budget = _token_budget_for_model(
+        expensive_fallback,
+        task,
+        mode="quality",
+        requested_max_tokens=1400,
+        max_cost_usd=0.006,
+    )
+
+    assert primary_budget.max_output_tokens == 1400
+    assert fallback_budget.max_output_tokens == 500
+    assert _estimate_cost_for_model(expensive_fallback, task, fallback_budget.max_output_tokens) <= 0.006

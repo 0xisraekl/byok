@@ -33,7 +33,7 @@ from byok.core.classifier import TASK_SIGNALS, TaskClassifier, TaskProfile
 from byok.core.policy import RoutingPolicy
 from byok.core.registry import ModelConfig, ModelRegistry
 from byok.core.router import ModelRouter, RoutingDecision
-from byok.core.token_budget import TokenBudgeter
+from byok.core.token_budget import TokenBudget, TokenBudgeter
 from byok.providers.anthropic_provider import AnthropicProvider
 from byok.providers.ollama_provider import OllamaProvider
 from byok.providers.openai_provider import OpenAIProvider
@@ -230,15 +230,6 @@ async def chat_completions(request: Request):
         )
 
     model = decision.selected_model
-    token_budget = token_budgeter.budget_for_model_cost(
-        task=task,
-        cost_per_1k_input=model.cost_per_1k_input,
-        cost_per_1k_output=model.cost_per_1k_output,
-        mode=route_controls.mode,
-        requested_max_tokens=route_controls.max_output_tokens,
-        max_cost_usd=effective_max_cost_usd,
-    )
-    max_tokens = token_budget.max_output_tokens
 
     # ── Call the selected provider, with transparent fallback ──────────────
     # The router's first choice is still the product decision. If that
@@ -248,10 +239,26 @@ async def chat_completions(request: Request):
     attempted_models: list[str] = []
     fallback_errors: list[dict[str, str]] = []
     chat_response = None
+    token_budget: Optional[TokenBudget] = None
     selected_by_router = model.name
 
     for attempt_model in _attempt_models(decision, registry):
         attempted_models.append(attempt_model.name)
+        attempt_budget = _token_budget_for_model(
+            attempt_model,
+            task,
+            route_controls.mode,
+            route_controls.max_output_tokens,
+            effective_max_cost_usd,
+        )
+        if attempt_budget.max_output_tokens <= 0:
+            fallback_errors.append(
+                {
+                    "model": attempt_model.name,
+                    "error": "budget leaves no output tokens for this fallback model",
+                }
+            )
+            continue
         try:
             provider = _get_provider(attempt_model)
             chat_response = await provider.chat_completion(
@@ -259,12 +266,19 @@ async def chat_completions(request: Request):
                 messages=provider_messages,
                 tools=tools if tools else None,
                 temperature=temperature,
-                max_tokens=max_tokens,
+                max_tokens=attempt_budget.max_output_tokens,
             )
             model = attempt_model
+            token_budget = attempt_budget
             break
         except Exception as exc:
-            fallback_errors.append({"model": attempt_model.name, "error": str(exc)})
+            fallback_errors.append(
+                {
+                    "model": attempt_model.name,
+                    "error": str(exc),
+                    "max_tokens": str(attempt_budget.max_output_tokens),
+                }
+            )
 
     if chat_response is None:
         raise HTTPException(
@@ -277,6 +291,9 @@ async def chat_completions(request: Request):
         )
 
     fallback_from = selected_by_router if model.name != selected_by_router else None
+    if token_budget is None:
+        raise HTTPException(status_code=500, detail="Internal BYOK error: missing token budget for selected model.")
+    selected_estimated_cost = _estimate_cost_for_model(model, task, token_budget.max_output_tokens)
 
     # ── Calculate cost and log ────────────────────────────────────────────
     cost = (
@@ -323,7 +340,8 @@ async def chat_completions(request: Request):
             "score": round(decision.score, 2),
             "quality_estimate": round(decision.quality_estimate, 2),
             "best_quality_model": decision.best_quality_model,
-            "estimated_cost_usd": round(decision.estimated_cost_usd, 6),
+            "estimated_cost_usd": round(selected_estimated_cost, 6),
+            "router_first_choice_estimated_cost_usd": round(decision.estimated_cost_usd, 6),
             "premium_reference_cost_usd": round(decision.premium_reference_cost_usd, 6) if decision.premium_reference_cost_usd is not None else None,
             "estimated_savings_usd": round(decision.estimated_savings_usd, 6) if decision.estimated_savings_usd is not None else None,
             "estimated_savings_pct": round(decision.estimated_savings_pct, 1) if decision.estimated_savings_pct is not None else None,
@@ -541,6 +559,30 @@ def _combine_cost_limits(*limits: Optional[float]) -> Optional[float]:
     if not active:
         return None
     return min(active)
+
+
+def _token_budget_for_model(
+    model: ModelConfig,
+    task: TaskProfile,
+    mode: str,
+    requested_max_tokens: Optional[int],
+    max_cost_usd: Optional[float],
+) -> TokenBudget:
+    return token_budgeter.budget_for_model_cost(
+        task=task,
+        cost_per_1k_input=model.cost_per_1k_input,
+        cost_per_1k_output=model.cost_per_1k_output,
+        mode=mode,
+        requested_max_tokens=requested_max_tokens,
+        max_cost_usd=max_cost_usd,
+    )
+
+
+def _estimate_cost_for_model(model: ModelConfig, task: TaskProfile, output_tokens: int) -> float:
+    return (
+        task.context_tokens * model.cost_per_1k_input / 1000
+        + output_tokens * model.cost_per_1k_output / 1000
+    )
 
 
 def _strip_byok_hints_from_messages(messages: list[dict]) -> list[dict]:
